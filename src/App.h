@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DebugLog.h"
 #include "Overlays.h"
 #include "Settings.h"
 #include "TouchKeyboard.h"
@@ -28,6 +29,7 @@ public:
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
+    void LogInputMessage(const char* stage, UINT msg, WPARAM wParam);
     bool HandlePointer(UINT msg, WPARAM wParam);
     void HandleRawInput(LPARAM lParam);
     void PollKeyboard();
@@ -53,12 +55,19 @@ private:
     TouchKeyboard keyboard_;
     ActiveBorder border_;
     Osd osd_;
+    DebugLog log_;
 
     bool enabled_ = false;           // the user wants the touchpad on
     bool keyboardPassthrough_ = false; // touch keyboard is open, so touch goes straight to the screen
     bool capturing_ = false;
     enum class Registration { None, Capture, Observe } registration_ = Registration::None;
     POINT lastTouch_{};
+
+    // While touch is redirected here, Windows shows this thread's cursor, so we mirror the shape
+    // that the app under the pointer last asked for (tracked with a WinEvent hook).
+    static void CALLBACK OnCursorEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD);
+    HWINEVENTHOOK cursorHook_ = nullptr;
+    HCURSOR appCursor_ = LoadCursorW(nullptr, IDC_ARROW);
 
     NOTIFYICONDATAW tray_{};
     HICON iconOn_ = nullptr;

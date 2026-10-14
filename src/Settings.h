@@ -43,6 +43,9 @@ struct Settings
     double BorderThickness = 3;
     bool ShowOsd = true;            // brief "Touchpad on/off" label when toggling
 
+    // Diagnostics
+    bool DebugLog = false;          // log pointer/mouse messages to %LOCALAPPDATA%\VirtualTouchpad\debug.log
+
     static std::wstring FilePath();
     static Settings Load();
     void Save() const;

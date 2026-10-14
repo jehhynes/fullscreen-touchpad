@@ -365,6 +365,19 @@ TEST_F(EngineTest, EnforceCursorUndoesWindowsMovingTheCursorToTheFinger)
     EXPECT_EQ(Pt(host.cursor), "800,600");
 }
 
+TEST_F(EngineTest, WakeCursorResendsThePointerPositionButNotWhenObserving)
+{
+    engine->SyncCursor(POINT{ 800, 600 });
+    host.cursor = POINT{ 1, 1 };
+    engine->WakeCursor();
+    EXPECT_EQ(Pt(host.cursor), "800,600");
+
+    engine->SetObserveOnly(true);
+    host.cursor = POINT{ 1, 1 };
+    engine->WakeCursor();
+    EXPECT_EQ(Pt(host.cursor), "1,1");
+}
+
 // ------------------------------------------------------------------ scroll and zoom
 
 TEST_F(EngineTest, TwoFingersUpScrollsDownWithNaturalScrolling)

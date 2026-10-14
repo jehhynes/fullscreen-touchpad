@@ -26,6 +26,7 @@ add_executable(VirtualTouchpad WIN32
     src/TouchKeyboard.cpp
     src/Settings.cpp
     src/Overlays.cpp
+    src/DebugLog.cpp
     src/app.manifest
 )
 target_compile_options(VirtualTouchpad PRIVATE ${VT_OPTIONS})
@@ -34,6 +35,12 @@ target_compile_options(VirtualTouchpad PRIVATE ${VT_OPTIONS})
 target_link_options(VirtualTouchpad PRIVATE /MANIFESTUAC:NO)
 
 target_link_libraries(VirtualTouchpad PRIVATE touchpad_core user32 gdi32 shell32 shcore advapi32 ole32 uuid oleaut32)
+
+# Diagnostic: injects synthetic touch and checks whether the cursor jumps to the touch point.
+add_executable(touchprobe tools/touchprobe.cpp)
+target_compile_options(touchprobe PRIVATE ${VT_OPTIONS})
+target_compile_definitions(touchprobe PRIVATE ${VT_DEFINES})
+target_link_libraries(touchprobe PRIVATE user32)
 
 if(VT_BUILD_TESTS)
     include(FetchContent)

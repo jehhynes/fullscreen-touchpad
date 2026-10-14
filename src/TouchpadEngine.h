@@ -43,6 +43,10 @@ public:
     void SyncCursor(POINT p);
     void EnforceCursor();
 
+    // Re-sends the pointer position. Windows hides the cursor when a touch starts; any mouse
+    // input shows it again, so call this on touch-down to keep the pointer visible.
+    void WakeCursor();
+
 private:
     enum class Mode
     {

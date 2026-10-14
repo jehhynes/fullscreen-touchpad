@@ -413,6 +413,13 @@ void TouchpadEngine::EnforceCursor()
     if (actual.x != sentX_ || actual.y != sentY_) host_.MoveCursorTo(CursorPoint());
 }
 
+void TouchpadEngine::WakeCursor()
+{
+    if (observeOnly_) return;
+    EnsureCursor();
+    host_.MoveCursorTo(CursorPoint());
+}
+
 void TouchpadEngine::MoveCursor(double dx, double dy, int64_t dt)
 {
     const double speed = std::hypot(dx, dy) / scale_ / double(std::max<int64_t>(1, dt));

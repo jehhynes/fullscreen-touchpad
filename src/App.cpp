@@ -8,6 +8,8 @@
 
 namespace
 {
+    App* g_app = nullptr; // for the WinEvent callback, which has no context parameter
+
     constexpr UINT_PTR kKeyboardPollTimer = 1;
     constexpr UINT kKeyboardPollMs = 250;
     constexpr int kToggleHotkey = 1;
@@ -137,6 +139,7 @@ bool App::Create()
     WNDCLASSEXW wc{ sizeof(wc) };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = instance_;
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = kHostWindowClass;
     if (!RegisterClassExW(&wc)) return false;
 
@@ -146,6 +149,7 @@ bool App::Create()
                             0, 0, 1, 1, nullptr, nullptr, instance_, this);
     if (!hwnd_) return false;
     host_.hwnd = hwnd_;
+    if (settings_.DebugLog) log_.Open();
 
     SetLayeredWindowAttributes(hwnd_, 0, 0, LWA_ALPHA);
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
@@ -156,6 +160,11 @@ bool App::Create()
         ChangeWindowMessageFilterEx(hwnd_, msg, MSGFLT_ALLOW, nullptr);
 
     RegisterHotKey(hwnd_, kToggleHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T');
+
+    // Cursor shape changes by other apps (see Raymond Chen, "How can I be notified when the cursor changes?").
+    g_app = this;
+    cursorHook_ = SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, nullptr, OnCursorEvent, 0, 0,
+                                  WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
     // Raw mouse input comes only from physical mice and touchpads (not from touch, and not
     // from our own SendInput), so it tells us when to adopt the real cursor position.
@@ -204,8 +213,50 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return app ? app->HandleMessage(msg, wParam, lParam) : DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+namespace
+{
+    // Pointer messages (incl. non-client, wheel, routed), mouse messages, and legacy touch/gesture.
+    bool IsInputMessage(UINT msg)
+    {
+        return (msg >= 0x0238 && msg <= 0x0253) || (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) ||
+               (msg >= WM_NCMOUSEMOVE && msg <= WM_NCXBUTTONDBLCLK) || msg == WM_GESTURE || msg == WM_TOUCH ||
+               msg == WM_SETCURSOR;
+    }
+
+    bool IsPointerMessage(UINT msg) { return msg >= 0x0238 && msg <= 0x0253; }
+
+    const char* CursorName(HCURSOR c)
+    {
+        if (!c) return "none";
+        static const struct { LPCWSTR id; const char* name; } kCursors[] = {
+            { IDC_ARROW, "arrow" }, { IDC_IBEAM, "ibeam" }, { IDC_WAIT, "WAIT" },
+            { IDC_APPSTARTING, "APPSTARTING" }, { IDC_HAND, "hand" }, { IDC_SIZEALL, "sizeall" },
+        };
+        for (const auto& k : kCursors)
+            if (LoadCursorW(nullptr, k.id) == c) return k.name;
+        return "other";
+    }
+}
+
+void App::LogInputMessage(const char* stage, UINT msg, WPARAM wParam)
+{
+    CURSORINFO ci{ sizeof(ci) };
+    GetCursorInfo(&ci);
+    POINTER_INFO info{};
+    const UINT32 id = GET_POINTERID_WPARAM(wParam);
+    const bool pointer = IsPointerMessage(msg) && GetPointerInfo(id, &info);
+    // cflags: 1 = CURSOR_SHOWING, 2 = CURSOR_SUPPRESSED (hidden because of touch/pen)
+    log_.Write("%-7s msg=0x%04X pid=%u type=%d flags=0x%04X touch=%ld,%ld cursor=%ld,%ld cflags=%lu shape=%s cap=%d",
+               stage, msg, pointer ? id : 0, pointer ? int(info.pointerType) : 0,
+               pointer ? HIWORD(wParam) : 0, info.ptPixelLocation.x, info.ptPixelLocation.y,
+               ci.ptScreenPos.x, ci.ptScreenPos.y, ci.flags, CursorName(ci.hCursor), capturing_ ? 1 : 0);
+}
+
 LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    const bool logged = log_.On() && IsInputMessage(msg);
+    if (logged) LogInputMessage("recv", msg, wParam);
+
     switch (msg)
     {
     case WM_POINTERDOWN:
@@ -264,6 +315,7 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         break;
 
     case WM_DESTROY:
+        if (cursorHook_) UnhookWinEvent(cursorHook_);
         engine_.Reset();
         ReleaseTouch();
         border_.Hide();
@@ -280,6 +332,7 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     }
+    if (logged) LogInputMessage("default", msg, wParam);
     return DefWindowProcW(hwnd_, msg, wParam, lParam);
 }
 
@@ -295,6 +348,11 @@ bool App::HandlePointer(UINT msg, WPARAM wParam)
     }
     if (info.pointerType != PT_TOUCH) return false;
 
+    // While touch is redirected here, Windows shows *this thread's* cursor. We never get
+    // WM_SETCURSOR for it, and an unset thread cursor is the busy (wait) cursor. Show the shape
+    // the app under the pointer wants (I-beam over text, etc.) so the two never alternate.
+    if (capturing_) SetCursor(appCursor_);
+
     const POINT p = info.ptPixelLocation;
     const bool canceled = (info.pointerFlags & POINTER_FLAG_CANCELED) != 0;
     lastTouch_ = p;
@@ -304,6 +362,7 @@ bool App::HandlePointer(UINT msg, WPARAM wParam)
     case WM_POINTERDOWN:
         engine_.SetDpi(DpiAt(p));
         engine_.OnDown(id, p.x, p.y);
+        engine_.WakeCursor(); // touch-down hides the cursor; mouse input brings it back
         break;
     case WM_POINTERUPDATE:
         if (canceled) engine_.OnUp(id, true);
@@ -318,8 +377,25 @@ bool App::HandlePointer(UINT msg, WPARAM wParam)
     }
 
     // Windows moves the real cursor to the finger; put it straight back at the touchpad pointer.
+    POINT before{};
+    if (log_.On()) GetCursorPos(&before);
     engine_.EnforceCursor();
+    if (log_.On())
+    {
+        POINT after{};
+        GetCursorPos(&after);
+        if (after.x != before.x || after.y != before.y)
+            log_.Write("snap    cursor was %ld,%ld (touch %ld,%ld), restored to %ld,%ld",
+                       before.x, before.y, p.x, p.y, after.x, after.y);
+    }
     return true;
+}
+
+void CALLBACK App::OnCursorEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD)
+{
+    if (!g_app || hwnd != nullptr || idObject != OBJID_CURSOR || idChild != CHILDID_SELF) return;
+    CURSORINFO ci{ sizeof(ci) };
+    if (GetCursorInfo(&ci) && ci.hCursor) g_app->appCursor_ = ci.hCursor;
 }
 
 void App::HandleRawInput(LPARAM lParam)
@@ -383,13 +459,15 @@ bool App::ApplyCapture()
         error = GetLastError();
     }
     if (!capture || !ok) ObserveTouch();
-    SetLastError(error); // report the capture failure, not anything from ObserveTouch
 
     capturing_ = capture && ok;
     engine_.SetObserveOnly(!capturing_);
+    log_.Write("state   enabled=%d keyboardPassthrough=%d capture=%d ok=%d error=%lu registration=%d",
+               enabled_, keyboardPassthrough_, capture, ok, error, int(registration_));
 
     if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
     else border_.Hide();
+    SetLastError(error); // callers report the capture failure, not anything that happened since
     return ok;
 }
 
@@ -500,6 +578,8 @@ void App::ReloadSettings()
 {
     settings_ = Settings::Load();
     engine_.ApplySettings(settings_);
+    if (settings_.DebugLog) log_.Open();
+    else log_.Close();
     if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
     else border_.Hide();
 }

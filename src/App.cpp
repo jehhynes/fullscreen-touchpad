@@ -1,63 +1,53 @@
 #include "App.h"
-#include "InputSender.h"
-#include "Messages.h"
 
 #include <windowsx.h>
+#include <shlobj.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <string>
+#include <vector>
 
 namespace
 {
     App* g_app = nullptr; // for the WinEvent callback, which has no context parameter
 
-    constexpr UINT_PTR kKeyboardPollTimer = 1;
-    constexpr UINT kKeyboardPollMs = 250;
+    constexpr UINT_PTR kTapTimer = 1;   // ends touch sessions for tap detection
+    constexpr UINT_PTR kShapeTimer = 2; // keeps the touchpad in shape and the tray icon current (backstop for events)
+    constexpr UINT_PTR kExitTimer = 3;  // waits for the touchpad to close before exiting
+
+    // If the app crashes, put the touchpad window back so the user isn't left with an invisible one.
+    LONG WINAPI OnCrash(EXCEPTION_POINTERS*)
+    {
+        if (g_app) g_app->RestoreTouchpad();
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     constexpr int kToggleHotkey = 1;
     constexpr UINT kTrayId = 1;
     constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
     constexpr wchar_t kRunValue[] = L"VirtualTouchpad";
 
-    enum MenuId : UINT
-    {
-        IdEnabled = 1,
-        IdNaturalScrolling,
-        IdShowBorder,
-        IdStartWithWindows,
-        IdEditSettings,
-        IdReloadSettings,
-        IdExit,
-    };
+    enum MenuId : UINT { IdOn = 1, IdStartWithWindows, IdEditSettings, IdExit };
 
-    // RegisterPointerInputTargetEx (observe mode) isn't in every SDK's headers; resolve it at runtime.
-    using RegisterTargetExFn = BOOL(WINAPI*)(HWND, POINTER_INPUT_TYPE, BOOL);
-    using UnregisterTargetExFn = BOOL(WINAPI*)(HWND, POINTER_INPUT_TYPE);
-
-    RegisterTargetExFn RegisterTargetEx()
+    TapDetector::Params DetectorParams(const Settings& s)
     {
-        static auto fn = reinterpret_cast<RegisterTargetExFn>(
-            GetProcAddress(GetModuleHandleW(L"user32.dll"), "RegisterPointerInputTargetEx"));
-        return fn;
+        TapDetector::Params p;
+        p.fingers = std::max(2, int(s.ToggleFingers));
+        p.maxDurationMs = int(s.ToggleMaxMs);
+        return p;
     }
 
-    UnregisterTargetExFn UnregisterTargetEx()
+    BuiltinTouchpad::Options TouchpadOptions(const Settings& s)
     {
-        static auto fn = reinterpret_cast<UnregisterTargetExFn>(
-            GetProcAddress(GetModuleHandleW(L"user32.dll"), "UnregisterPointerInputTargetEx"));
-        return fn;
+        BuiltinTouchpad::Options o;
+        o.alpha = BYTE(std::clamp(int(s.Opacity), 1, 255));
+        o.edgeGap = std::max(0, int(s.EdgeGap));
+        o.holeRadius = std::max(1, int(s.PointerHole));
+        return o;
     }
 
-    bool HasUIAccess()
-    {
-        HANDLE token = nullptr;
-        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
-        DWORD uiAccess = 0, size = 0;
-        const BOOL ok = GetTokenInformation(token, TokenUIAccess, &uiAccess, sizeof(uiAccess), &size);
-        CloseHandle(token);
-        return ok && uiAccess != 0;
-    }
-
-    // Draws a small touchpad glyph: a filled blue pad when on, a grey outline when off.
+    // A small touchpad glyph: a filled blue pad when on, a grey outline when off.
     HICON MakeTrayIcon(bool on)
     {
         const int s = GetSystemMetrics(SM_CXSMICON);
@@ -68,30 +58,23 @@ namespace
         ReleaseDC(nullptr, screen);
 
         const RECT full{ 0, 0, s, s };
-        const int inset = std::max(1, s / 16);
-        const int r = std::max(2, s / 4);
-        const int penWidth = std::max(1, s / 12);
-
+        const int inset = std::max(1, s / 16), r = std::max(2, s / 4), pen = std::max(1, s / 12);
         auto drawPad = [&](COLORREF fill, COLORREF outline, bool filled) {
-            HPEN pen = CreatePen(PS_INSIDEFRAME, penWidth, outline);
-            HBRUSH brush = filled ? CreateSolidBrush(fill) : static_cast<HBRUSH>(GetStockObject(NULL_BRUSH));
-            HGDIOBJ oldPen = SelectObject(dc, pen);
-            HGDIOBJ oldBrush = SelectObject(dc, brush);
+            HPEN p = CreatePen(PS_INSIDEFRAME, pen, outline);
+            HBRUSH b = filled ? CreateSolidBrush(fill) : static_cast<HBRUSH>(GetStockObject(NULL_BRUSH));
+            HGDIOBJ oldPen = SelectObject(dc, p), oldBrush = SelectObject(dc, b);
             RoundRect(dc, inset, inset + s / 8, s - inset, s - inset - s / 8, r, r);
             SelectObject(dc, oldBrush);
             SelectObject(dc, oldPen);
-            DeleteObject(pen);
-            if (filled) DeleteObject(brush);
+            DeleteObject(p);
+            if (filled) DeleteObject(b);
         };
 
-        // Colour plane: black where transparent (required by the AND/XOR icon format).
-        HGDIOBJ old = SelectObject(dc, color);
+        HGDIOBJ old = SelectObject(dc, color); // colour plane: black where transparent
         FillRect(dc, &full, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         if (on) drawPad(RGB(0, 120, 215), RGB(0, 120, 215), true);
         else drawPad(0, RGB(140, 140, 140), false);
-
-        // Mask plane: white = transparent, black = opaque.
-        SelectObject(dc, mask);
+        SelectObject(dc, mask); // mask plane: white = transparent
         FillRect(dc, &full, static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
         drawPad(RGB(0, 0, 0), RGB(0, 0, 0), on);
         SelectObject(dc, old);
@@ -103,93 +86,61 @@ namespace
         DeleteDC(dc);
         return icon;
     }
-
-    void DisableTouchFeedback(HWND hwnd)
-    {
-        const FEEDBACK_TYPE types[] = {
-            FEEDBACK_TOUCH_CONTACTVISUALIZATION, FEEDBACK_TOUCH_TAP, FEEDBACK_TOUCH_DOUBLETAP,
-            FEEDBACK_TOUCH_PRESSANDHOLD, FEEDBACK_TOUCH_RIGHTTAP, FEEDBACK_GESTURE_PRESSANDTAP,
-        };
-        BOOL off = FALSE;
-        for (FEEDBACK_TYPE t : types) SetWindowFeedbackSetting(hwnd, t, 0, sizeof(off), &off);
-    }
 }
 
 App::App(HINSTANCE instance)
     : instance_(instance),
       settings_(Settings::Load()),
-      engine_(settings_, host_)
+      touchpad_(TouchpadOptions(settings_)),
+      detector_(DetectorParams(settings_))
 {
-    // Toggling re-registers the pointer target, so don't do it from inside a pointer message.
-    host_.onToggle = [this] { PostMessageW(hwnd_, WM_APP_TOGGLE, 0, 0); };
-    host_.onLeftClick = [this] {
-        if (settings_.ShowKeyboardForTextFields) keyboard_.CheckFocusSoon();
-    };
+    g_app = this;
 }
 
 App::~App()
 {
+    g_app = nullptr;
     if (iconOn_) DestroyIcon(iconOn_);
     if (iconOff_) DestroyIcon(iconOff_);
 }
 
 bool App::Create()
 {
-    RegisterOverlayClass(instance_);
-
     WNDCLASSEXW wc{ sizeof(wc) };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = instance_;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.lpszClassName = kHostWindowClass;
+    wc.lpszClassName = kAppWindowClass;
     if (!RegisterClassExW(&wc)) return false;
 
-    // A 1x1, fully transparent, click-through window. Touch reaches it by redirection, not hit-testing.
-    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT,
-                            kHostWindowClass, L"Virtual Touchpad", WS_POPUP,
-                            0, 0, 1, 1, nullptr, nullptr, instance_, this);
+    // Never shown; a top-level window so the tray menu can take the foreground.
+    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, kAppWindowClass, L"Virtual Touchpad", WS_POPUP, 0, 0, 0, 0, nullptr,
+                            nullptr, instance_, this);
     if (!hwnd_) return false;
-    host_.hwnd = hwnd_;
-    if (settings_.DebugLog) log_.Open();
-
-    SetLayeredWindowAttributes(hwnd_, 0, 0, LWA_ALPHA);
-    ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-    DisableTouchFeedback(hwnd_);
+    button_ = std::make_unique<TaskbarButton>(hwnd_, WM_APP_PRESS_RESULT);
+    SetUnhandledExceptionFilter(OnCrash);
 
     taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
-    for (UINT msg : { taskbarCreatedMsg_, UINT(WM_APP_TOGGLE), UINT(WM_APP_TRAY) })
-        ChangeWindowMessageFilterEx(hwnd_, msg, MSGFLT_ALLOW, nullptr);
-
     RegisterHotKey(hwnd_, kToggleHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T');
+    rawTouch_.Register(hwnd_);
 
-    // Cursor shape changes by other apps (see Raymond Chen, "How can I be notified when the cursor changes?").
-    g_app = this;
-    cursorHook_ = SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, nullptr, OnCursorEvent, 0, 0,
-                                  WINEVENT_OUTOFCONTEXT);
-    focusHook_ = SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS, nullptr, OnFocusEvent, 0, 0,
+    // Reshape the touchpad whenever it opens; move the pointer hole whenever the cursor moves.
+    // The touchpad is an app frame window: it appears by being uncloaked rather than shown.
+    showHideHook_ = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, nullptr, OnWinEvent, 0, 0,
+                                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    cloakHook_ = SetWinEventHook(EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED, nullptr, OnWinEvent, 0, 0,
                                  WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-
-    // Raw mouse input comes only from physical mice and touchpads (not from touch, and not
-    // from our own SendInput), so it tells us when to adopt the real cursor position.
-    RAWINPUTDEVICE mouse{ 0x01, 0x02, RIDEV_INPUTSINK, hwnd_ };
-    RegisterRawInputDevices(&mouse, 1, sizeof(mouse));
-
-    SetTimer(hwnd_, kKeyboardPollTimer, kKeyboardPollMs, nullptr);
+    locationHook_ = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, OnWinEvent, 0,
+                                    0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
     iconOn_ = MakeTrayIcon(true);
     iconOff_ = MakeTrayIcon(false);
     AddTrayIcon();
 
-    if (!HasUIAccess())
-    {
-        MessageBoxW(nullptr,
-                    L"Virtual Touchpad needs the UIAccess privilege to take over touch input, "
-                    L"and Windows only grants it to signed apps installed under Program Files.\n\n"
-                    L"Run scripts\\install.ps1 from an elevated PowerShell to install it.",
-                    L"Virtual Touchpad", MB_OK | MB_ICONWARNING);
-    }
+    if (touchpad_.IsOpen()) touchpad_.Apply();
+    else if (settings_.StartEnabled) button_->Press();
 
-    SetEnabled(settings_.StartEnabled, false);
+    SetTimer(hwnd_, kTapTimer, 50, nullptr);
+    SetTimer(hwnd_, kShapeTimer, 250, nullptr);
     return true;
 }
 
@@ -208,94 +159,70 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (msg == WM_NCCREATE)
     {
-        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
-        static_cast<App*>(cs->lpCreateParams)->hwnd_ = hwnd;
+        auto* app = static_cast<App*>(reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+        app->hwnd_ = hwnd;
     }
     auto* app = reinterpret_cast<App*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     return app ? app->HandleMessage(msg, wParam, lParam) : DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-namespace
+void CALLBACK App::OnWinEvent(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject, LONG, DWORD, DWORD)
 {
-    // Pointer messages (incl. non-client, wheel, routed), mouse messages, and legacy touch/gesture.
-    bool IsInputMessage(UINT msg)
+    if (!g_app) return;
+    if (event == EVENT_OBJECT_LOCATIONCHANGE)
     {
-        return (msg >= 0x0238 && msg <= 0x0253) || (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) ||
-               (msg >= WM_NCMOUSEMOVE && msg <= WM_NCXBUTTONDBLCLK) || msg == WM_GESTURE || msg == WM_TOUCH ||
-               msg == WM_SETCURSOR;
+        if (idObject == OBJID_CURSOR) g_app->touchpad_.UpdatePointerHole();
+        else if (idObject == OBJID_WINDOW && hwnd && hwnd == g_app->touchpad_.Shaped())
+            g_app->touchpad_.Apply(); // put it back if it moved or resized itself
+        return;
     }
+    if (idObject != OBJID_WINDOW || !hwnd) return;
+    wchar_t cls[64];
+    if (!GetClassNameW(hwnd, cls, ARRAYSIZE(cls)) || wcscmp(cls, L"ApplicationFrameWindow") != 0) return;
 
-    bool IsPointerMessage(UINT msg) { return msg >= 0x0238 && msg <= 0x0253; }
-
-    const char* CursorName(HCURSOR c)
-    {
-        if (!c) return "none";
-        static const struct { LPCWSTR id; const char* name; } kCursors[] = {
-            { IDC_ARROW, "arrow" }, { IDC_IBEAM, "ibeam" }, { IDC_WAIT, "WAIT" },
-            { IDC_APPSTARTING, "APPSTARTING" }, { IDC_HAND, "hand" }, { IDC_SIZEALL, "sizeall" },
-        };
-        for (const auto& k : kCursors)
-            if (LoadCursorW(nullptr, k.id) == c) return k.name;
-        return "other";
-    }
-}
-
-void App::LogInputMessage(const char* stage, UINT msg, WPARAM wParam)
-{
-    CURSORINFO ci{ sizeof(ci) };
-    GetCursorInfo(&ci);
-    POINTER_INFO info{};
-    const UINT32 id = GET_POINTERID_WPARAM(wParam);
-    const bool pointer = IsPointerMessage(msg) && GetPointerInfo(id, &info);
-    // cflags: 1 = CURSOR_SHOWING, 2 = CURSOR_SUPPRESSED (hidden because of touch/pen)
-    log_.Write("%-7s msg=0x%04X pid=%u type=%d flags=0x%04X touch=%ld,%ld cursor=%ld,%ld cflags=%lu shape=%s cap=%d",
-               stage, msg, pointer ? id : 0, pointer ? int(info.pointerType) : 0,
-               pointer ? HIWORD(wParam) : 0, info.ptPixelLocation.x, info.ptPixelLocation.y,
-               ci.ptScreenPos.x, ci.ptScreenPos.y, ci.flags, CursorName(ci.hCursor), capturing_ ? 1 : 0);
+    if (event == EVENT_OBJECT_SHOW || event == EVENT_OBJECT_UNCLOAKED) g_app->touchpad_.Apply();
+    g_app->UpdateTrayIcon();
 }
 
 LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    const bool logged = log_.On() && IsInputMessage(msg);
-    if (logged) LogInputMessage("recv", msg, wParam);
-
     switch (msg)
     {
-    case WM_POINTERDOWN:
-    case WM_POINTERUPDATE:
-    case WM_POINTERUP:
-    case WM_POINTERCAPTURECHANGED:
-    case WM_POINTERENTER:
-    case WM_POINTERLEAVE:
-        // Handled touch must not reach DefWindowProc, which would promote it to mouse input.
-        if (HandlePointer(msg, wParam)) return 0;
-        break;
-
-    case WM_POINTERACTIVATE:
-        return PA_NOACTIVATE;
-    case WM_MOUSEACTIVATE:
-        return MA_NOACTIVATE;
-
     case WM_INPUT:
-        HandleRawInput(lParam);
+    {
+        int count = 0;
+        std::vector<TapDetector::Contact> contacts;
+        if (rawTouch_.Read(lParam, count, contacts)) detector_.OnReport(int64_t(GetTickCount64()), count, contacts);
         break; // DefWindowProc does the raw input cleanup
+    }
 
     case WM_TIMER:
-        if (wParam >= Win32TouchpadHost::kTimerBase) engine_.OnTimer(int(wParam - Win32TouchpadHost::kTimerBase));
-        else if (wParam == kKeyboardPollTimer) PollKeyboard();
-        return 0;
-
-    case WM_HOTKEY:
-        if (wParam == kToggleHotkey)
+        if (wParam == kTapTimer)
         {
-            GetCursorPos(&lastTouch_);
-            SetEnabled(!enabled_, true);
+            const bool wasInSession = detector_.InSession();
+            const bool tapped = detector_.Poll(int64_t(GetTickCount64()));
+            if (wasInSession && !detector_.InSession() && settings_.LogTouch) LogTouch(detector_.LastSession());
+            if (tapped) Toggle();
+        }
+        else if (wParam == kShapeTimer)
+        {
+            if (!closing_) touchpad_.Apply(); // no-op when it's closed or already in shape
+            UpdateTrayIcon();
+        }
+        else if (wParam == kExitTimer && (!touchpad_.IsOpen() || GetTickCount64() > closeDeadline_))
+        {
+            KillTimer(hwnd_, kExitTimer);
+            DestroyWindow(hwnd_);
         }
         return 0;
 
+    case WM_HOTKEY:
+        if (wParam == kToggleHotkey) Toggle();
+        return 0;
+
     case WM_APP_TOGGLE:
-        SetEnabled(!enabled_, true);
+        Toggle();
         return 0;
 
     case WM_APP_TRAY:
@@ -303,8 +230,7 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         {
         case NIN_SELECT:
         case NIN_KEYSELECT:
-            GetCursorPos(&lastTouch_);
-            SetEnabled(!enabled_, true);
+            Toggle();
             break;
         case WM_CONTEXTMENU:
             ShowTrayMenu(POINT{ GET_X_LPARAM(wParam), GET_Y_LPARAM(wParam) });
@@ -313,17 +239,40 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         return 0;
 
     case WM_DISPLAYCHANGE:
-    case WM_DPICHANGED:
-        if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
+    case WM_SETTINGCHANGE: // work area changes, e.g. taskbar moved or resized
+        touchpad_.Apply();
         break;
 
+    case WM_APP_PRESS_RESULT:
+        if (settings_.LogTouch)
+            LogLine("press step=" + std::to_string(int(wParam)) + " hr=0x" + [&] {
+                char hex[16];
+                sprintf_s(hex, "%08lX", static_cast<unsigned long>(HRESULT(lParam)));
+                return std::string(hex);
+            }());
+        if (wParam != 0 && settings_.ShowOsd) osd_.Flash(L"Turn on the taskbar's touchpad icon");
+        return 0;
+
+    case WM_CLOSE:
+        // Don't leave an invisible touchpad behind whose pointer hole no longer follows the pointer:
+        // close it first. Keep pumping messages while it closes (blocking here deadlocked with Explorer).
+        if (!closing_ && touchpad_.IsOpen())
+        {
+            closing_ = true;
+            closeDeadline_ = GetTickCount64() + 2500;
+            button_->Press();
+            SetTimer(hwnd_, kExitTimer, 100, nullptr);
+            return 0;
+        }
+        DestroyWindow(hwnd_);
+        return 0;
+
     case WM_DESTROY:
-        if (cursorHook_) UnhookWinEvent(cursorHook_);
-        if (focusHook_) UnhookWinEvent(focusHook_);
-        injector_.Destroy();
-        engine_.Reset();
-        ReleaseTouch();
-        border_.Hide();
+        // If the touchpad is somehow still open, at least put its window back to normal.
+        if (touchpad_.IsOpen()) touchpad_.Restore();
+        if (showHideHook_) UnhookWinEvent(showHideHook_);
+        if (cloakHook_) UnhookWinEvent(cloakHook_);
+        if (locationHook_) UnhookWinEvent(locationHook_);
         UnregisterHotKey(hwnd_, kToggleHotkey);
         Shell_NotifyIconW(NIM_DELETE, &tray_);
         PostQuitMessage(0);
@@ -337,211 +286,41 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     }
-    if (logged) LogInputMessage("default", msg, wParam);
     return DefWindowProcW(hwnd_, msg, wParam, lParam);
 }
 
-bool App::HandlePointer(UINT msg, WPARAM wParam)
+void App::Toggle()
 {
-    const UINT32 id = GET_POINTERID_WPARAM(wParam);
-    POINTER_INFO info{};
-    if (!GetPointerInfo(id, &info))
-    {
-        // The pointer is already gone; make sure we don't keep a stale contact.
-        if (msg == WM_POINTERUP || msg == WM_POINTERCAPTURECHANGED) engine_.OnUp(id, true);
-        return true;
-    }
-    if (info.pointerType != PT_TOUCH) return false;
+    // Opening and closing are asynchronous (about half a second); a second press while one is still
+    // in progress would undo it.
+    const ULONGLONG now = GetTickCount64();
+    if (now - lastToggleTick_ < 1500) return;
+    lastToggleTick_ = now;
 
-    // While touch is redirected here, Windows shows *this thread's* cursor. We never get
-    // WM_SETCURSOR for it, and an unset thread cursor is the busy (wait) cursor. Show the shape
-    // the app under the pointer wants (I-beam over text, etc.) so the two never alternate.
-    if (capturing_) SetCursor(appCursor_);
-
-    const POINT p = info.ptPixelLocation;
-    const bool canceled = (info.pointerFlags & POINTER_FLAG_CANCELED) != 0;
-    lastTouch_ = p;
-    lastTouchTick_ = GetTickCount64();
-
-    // Native mode: hand the whole frame to the virtual touchpad.
-    if (native_)
-    {
-        injector_.OnPointerMessage(id);
-        // A touch-down hides the cursor until the touchpad stack starts moving it (~100 ms later);
-        // mouse input at the current position shows it again straight away.
-        if (msg == WM_POINTERDOWN)
-        {
-            POINT cursor{};
-            GetCursorPos(&cursor);
-            input::MoveCursorTo(cursor);
-        }
-    }
-
-    switch (msg)
-    {
-    case WM_POINTERDOWN:
-        engine_.SetDpi(DpiAt(p));
-        engine_.OnDown(id, p.x, p.y);
-        engine_.WakeCursor(); // touch-down hides the cursor; mouse input brings it back
-        break;
-    case WM_POINTERUPDATE:
-        if (canceled) engine_.OnUp(id, true);
-        else engine_.OnMove(id, p.x, p.y);
-        break;
-    case WM_POINTERUP:
-        engine_.OnUp(id, canceled);
-        break;
-    case WM_POINTERCAPTURECHANGED:
-        engine_.OnUp(id, true);
-        break;
-    }
-
-    // Windows moves the real cursor to the finger; put it straight back at the touchpad pointer.
-    POINT before{};
-    if (log_.On()) GetCursorPos(&before);
-    engine_.EnforceCursor();
-    if (log_.On())
-    {
-        POINT after{};
-        GetCursorPos(&after);
-        if (after.x != before.x || after.y != before.y)
-            log_.Write("snap    cursor was %ld,%ld (touch %ld,%ld), restored to %ld,%ld",
-                       before.x, before.y, p.x, p.y, after.x, after.y);
-    }
-    return true;
+    const bool wasOn = touchpad_.IsOpen();
+    if (settings_.LogTouch) LogLine(wasOn ? "toggle: closing" : "toggle: opening");
+    button_->Press(); // the outcome arrives later as WM_APP_PRESS_RESULT
+    if (settings_.ShowOsd) osd_.Flash(wasOn ? L"Touchpad off" : L"Touchpad on");
 }
 
-void CALLBACK App::OnFocusEvent(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD)
+void App::LogTouch(const TapDetector::Summary& s)
 {
-    // Only focus changes caused by the touchpad (a touch within the last second) count as a tap.
-    if (!g_app || !g_app->native_ || !g_app->settings_.ShowKeyboardForTextFields) return;
-    if (GetTickCount64() - g_app->lastTouchTick_ > 1000) return;
-    g_app->keyboard_.CheckFocusSoon();
+    LogLine("touch fingers=" + std::to_string(s.maxFingers) + " duration=" + std::to_string(s.durationMs) +
+            "ms moved=" + std::to_string(s.moved ? 1 : 0) + " toggled=" + std::to_string(s.toggled ? 1 : 0));
 }
 
-void CALLBACK App::OnCursorEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD thread, DWORD)
+void App::LogLine(const std::string& line)
 {
-    if (!g_app || hwnd != nullptr || idObject != OBJID_CURSOR || idChild != CHILDID_SELF) return;
-    // The event arrives asynchronously, so the cursor showing now may already be ours again (the next
-    // touch frame makes our thread the cursor owner). Events are attributed to a system thread, so the
-    // only reliable test is: a shape different from our own thread's cursor must be the app's.
-    CURSORINFO ci{ sizeof(ci) };
-    if (GetCursorInfo(&ci) && ci.hCursor && ci.hCursor != GetCursor())
-    {
-        g_app->appCursor_ = ci.hCursor;
-        g_app->log_.Write("cursorev app shape=%s (thread %lu)", CursorName(ci.hCursor), thread);
-    }
-}
+    wchar_t* localAppData = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppData))) return;
+    const std::wstring dir = std::wstring(localAppData) + L"\\VirtualTouchpad";
+    CoTaskMemFree(localAppData);
+    CreateDirectoryW(dir.c_str(), nullptr);
 
-void App::HandleRawInput(LPARAM lParam)
-{
-    RAWINPUT raw{};
-    UINT size = sizeof(raw);
-    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) == UINT(-1))
-        return;
-
-    // hDevice is null for injected input, including our own.
-    if (raw.header.dwType != RIM_TYPEMOUSE || raw.header.hDevice == nullptr || engine_.Touching()) return;
-    POINT p{};
-    GetCursorPos(&p);
-    engine_.SyncCursor(p);
-}
-
-void App::PollKeyboard()
-{
-    const bool passthrough = enabled_ && settings_.TypeDirectlyOnKeyboard && keyboard_.IsVisible();
-    if (passthrough == keyboardPassthrough_) return;
-    keyboardPassthrough_ = passthrough;
-    ApplyCapture();
-}
-
-// ------------------------------------------------------------------ on/off
-
-void App::SetEnabled(bool enabled, bool announce)
-{
-    enabled_ = enabled;
-    keyboardPassthrough_ = enabled && settings_.TypeDirectlyOnKeyboard && keyboard_.IsVisible();
-    if (enabled) engine_.SyncCursor(host_.CursorPos());
-
-    if (!ApplyCapture() && enabled)
-    {
-        const DWORD error = GetLastError();
-        enabled_ = false;
-        ApplyCapture();
-        if (announce || HasUIAccess())
-        {
-            const std::wstring text = L"Couldn't take over touch input (error " + std::to_wstring(error) +
-                L").\n\nThis needs the UIAccess privilege (install with scripts\\install.cmd), and only "
-                L"one app at a time can capture touch.";
-            MessageBoxW(nullptr, text.c_str(), L"Virtual Touchpad", MB_OK | MB_ICONWARNING);
-        }
-    }
-
-    UpdateTrayIcon();
-    if (announce && settings_.ShowOsd) osd_.Flash(enabled_ ? L"Touchpad on" : L"Touchpad off", lastTouch_);
-}
-
-// Captures touch when the touchpad is on and the touch keyboard isn't open; otherwise observes.
-bool App::ApplyCapture()
-{
-    engine_.Reset();
-    const bool capture = enabled_ && !keyboardPassthrough_;
-    bool ok = true;
-    DWORD error = ERROR_SUCCESS;
-    if (capture && !CaptureTouch())
-    {
-        ok = false;
-        error = GetLastError();
-    }
-    if (!capture || !ok) ObserveTouch();
-
-    capturing_ = capture && ok;
-
-    // Native mode: Windows' touchpad stack does everything; our engine only watches for the toggle.
-    native_ = false;
-    if (capturing_ && settings_.NativeTouchpad)
-    {
-        POINT primary{ 0, 0 };
-        native_ = injector_.Ready() || injector_.Create(MonitorFromPoint(primary, MONITOR_DEFAULTTOPRIMARY));
-    }
-    else
-    {
-        injector_.Destroy();
-    }
-    engine_.SetObserveOnly(!capturing_ || native_);
-    log_.Write("state   enabled=%d keyboardPassthrough=%d capture=%d ok=%d error=%lu registration=%d native=%d",
-               enabled_, keyboardPassthrough_, capture, ok, error, int(registration_), native_);
-
-    if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
-    else border_.Hide();
-    SetLastError(error); // callers report the capture failure, not anything that happened since
-    return ok;
-}
-
-bool App::CaptureTouch()
-{
-    ReleaseTouch();
-    if (!RegisterPointerInputTarget(hwnd_, PT_TOUCH)) return false;
-    registration_ = Registration::Capture;
-    return true;
-}
-
-void App::ObserveTouch()
-{
-    ReleaseTouch();
-    // Observing lets apps keep receiving touch while we watch for the toggle gesture.
-    // If it isn't available, the hotkey and tray icon still work.
-    if (auto registerEx = RegisterTargetEx(); registerEx && registerEx(hwnd_, PT_TOUCH, TRUE))
-        registration_ = Registration::Observe;
-}
-
-void App::ReleaseTouch()
-{
-    if (registration_ == Registration::Capture)
-        UnregisterPointerInputTarget(hwnd_, PT_TOUCH);
-    else if (registration_ == Registration::Observe)
-        if (auto unregisterEx = UnregisterTargetEx()) unregisterEx(hwnd_, PT_TOUCH);
-    registration_ = Registration::None;
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, (dir + L"\\touch.log").c_str(), L"a") != 0 || !f) return;
+    fprintf(f, "%llu %s\n", GetTickCount64(), line.c_str());
+    fclose(f);
 }
 
 // ------------------------------------------------------------------ tray
@@ -553,8 +332,9 @@ void App::AddTrayIcon()
     tray_.uID = kTrayId;
     tray_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
     tray_.uCallbackMessage = WM_APP_TRAY;
-    tray_.hIcon = enabled_ ? iconOn_ : iconOff_;
-    wcscpy_s(tray_.szTip, enabled_ ? L"Virtual Touchpad: on" : L"Virtual Touchpad: off");
+    trayShowsOn_ = touchpad_.IsOpen();
+    tray_.hIcon = trayShowsOn_ ? iconOn_ : iconOff_;
+    wcscpy_s(tray_.szTip, L"Full-screen touchpad (four-finger tap or Ctrl+Alt+T)");
     Shell_NotifyIconW(NIM_ADD, &tray_);
     tray_.uVersion = NOTIFYICON_VERSION_4;
     Shell_NotifyIconW(NIM_SETVERSION, &tray_);
@@ -562,9 +342,11 @@ void App::AddTrayIcon()
 
 void App::UpdateTrayIcon()
 {
-    tray_.uFlags = NIF_ICON | NIF_TIP | NIF_SHOWTIP;
-    tray_.hIcon = enabled_ ? iconOn_ : iconOff_;
-    wcscpy_s(tray_.szTip, enabled_ ? L"Virtual Touchpad: on" : L"Virtual Touchpad: off");
+    const bool on = touchpad_.IsOpen();
+    if (on == trayShowsOn_) return;
+    trayShowsOn_ = on;
+    tray_.uFlags = NIF_ICON;
+    tray_.hIcon = on ? iconOn_ : iconOff_;
     Shell_NotifyIconW(NIM_MODIFY, &tray_);
 }
 
@@ -572,63 +354,26 @@ void App::ShowTrayMenu(POINT pt)
 {
     HMENU menu = CreatePopupMenu();
     auto check = [](bool on) { return UINT(on ? MF_CHECKED : MF_UNCHECKED); };
-
-    AppendMenuW(menu, MF_STRING | check(enabled_), IdEnabled, L"Touchpad enabled\tCtrl+Alt+T");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING | check(settings_.NaturalScrolling), IdNaturalScrolling, L"Natural scrolling");
-    AppendMenuW(menu, MF_STRING | check(settings_.ShowBorder), IdShowBorder, L"Show edge glow when on");
+    AppendMenuW(menu, MF_STRING | check(touchpad_.IsOpen()), IdOn, L"Touchpad on\tCtrl+Alt+T");
     AppendMenuW(menu, MF_STRING | check(StartsWithWindows()), IdStartWithWindows, L"Start with Windows");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, IdEditSettings, L"Edit settings...");
-    AppendMenuW(menu, MF_STRING, IdReloadSettings, L"Reload settings");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, IdExit, L"Exit");
 
-    SetForegroundWindow(hwnd_); // required for the menu to close when clicking elsewhere
+    SetForegroundWindow(hwnd_); // so the menu closes when clicking elsewhere
     const UINT cmd = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, pt.x, pt.y, hwnd_, nullptr);
     PostMessageW(hwnd_, WM_NULL, 0, 0);
     DestroyMenu(menu);
 
     switch (cmd)
     {
-    case IdEnabled:
-        lastTouch_ = pt;
-        SetEnabled(!enabled_, true);
-        break;
-    case IdNaturalScrolling:
-        settings_.NaturalScrolling = !settings_.NaturalScrolling;
-        settings_.Save();
-        engine_.ApplySettings(settings_);
-        break;
-    case IdShowBorder:
-        settings_.ShowBorder = !settings_.ShowBorder;
-        settings_.Save();
-        if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
-        else border_.Hide();
-        break;
-    case IdStartWithWindows:
-        SetStartWithWindows(!StartsWithWindows());
-        break;
+    case IdOn: Toggle(); break;
+    case IdStartWithWindows: SetStartWithWindows(!StartsWithWindows()); break;
     case IdEditSettings:
         ShellExecuteW(nullptr, L"open", L"notepad.exe", Settings::FilePath().c_str(), nullptr, SW_SHOWNORMAL);
         break;
-    case IdReloadSettings:
-        ReloadSettings();
-        break;
-    case IdExit:
-        DestroyWindow(hwnd_);
-        break;
+    case IdExit: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
     }
-}
-
-void App::ReloadSettings()
-{
-    settings_ = Settings::Load();
-    engine_.ApplySettings(settings_);
-    if (settings_.DebugLog) log_.Open();
-    else log_.Close();
-    if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
-    else border_.Hide();
 }
 
 bool App::StartsWithWindows() const

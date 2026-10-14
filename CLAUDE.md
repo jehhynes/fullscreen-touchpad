@@ -1,16 +1,17 @@
 # Virtual Touchpad
 
-Full-screen invisible touchpad for Windows touchscreens. C++20 / Win32, CMake (Visual Studio 2026
-generator), GoogleTest. See README.md for the design and gestures.
+Invisible full-screen touchpad for Windows touchscreens. C++20 / Win32, CMake (Visual Studio 2026
+generator), GoogleTest. It reshapes Windows' built-in virtual touchpad window rather than
+handling touch itself; see README.md.
 
 ## Commands
 
 - Build: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1`
-- Test: `build\Release\touchpad_tests.exe` (or `ctest --preset release`)
-- Deploy the current build: `scripts\update.cmd` (asks the user for admin rights; waits; exit code 0 = success,
-  log in `build\deploy.log`)
+- Test: `build\Release\touchpad_tests.exe`
+- Deploy the current build: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy.ps1`
+  (per-user, no admin; exits the running copy cleanly, copies, restarts)
 - Check what's installed: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-install.ps1`
-  (exit 0 = installed build is current, signed, and running)
+  (exit 0 = installed build is current and running)
 
 ## Definition of done
 
@@ -18,21 +19,28 @@ generator), GoogleTest. See README.md for the design and gestures.
 
 1. Build with no warnings.
 2. Run the unit tests; all must pass.
-3. Run `scripts\update.cmd` to deploy.
-4. Run `scripts\check-install.ps1` and confirm it reports current, `Valid` signature, and running.
+3. Deploy with `scripts\deploy.ps1`.
+4. Run `scripts\check-install.ps1` and confirm it reports current and running.
 
-Only then report completion, saying what was verified. If deploying fails or is blocked, say so plainly
-rather than reporting the task complete.
+Only then report completion, saying what was verified and what still needs the user's eyes or fingers.
 
-`scripts\install.cmd` (one-time setup) creates and trusts the signing certificate in the machine's root
-store, which is a system security change. The user runs that one, not Claude. If `update.cmd` says no
-signing certificate exists, ask the user to run `scripts\install.cmd`.
+## Lessons learned (don't repeat)
+
+- Capturing touch ourselves (RegisterPointerInputTarget, a full-screen overlay, SendInput or synthetic
+  touchpad injection) always made the cursor flicker and jump to the finger. Windows' built-in touchpad
+  doesn't, which is why this app reuses it.
+- Screenshots (BitBlt) show neither the cursor nor this layered touchpad window, so they can't confirm
+  what the user sees. Don't claim visual results from them.
+- Never leave the user without a way out: they may have no keyboard. Every mode must be switchable off
+  by touch (the taskbar stays uncovered, and the four-finger tap toggles).
+- No UI Automation calls on the UI thread (they deadlock); `TaskbarButton` runs them on its own thread.
+- The built-in touchpad closes by being cloaked, not hidden: "open" means visible and not cloaked.
+- PowerShell traps when testing: `$null` passed to a string parameter becomes `""` (use `[NullString]::Value`),
+  and `if ([IntPtr]::Zero)` is true (compare with `-ne [IntPtr]::Zero`).
+- `LogTouch=true` writes touches and toggle outcomes to `%LOCALAPPDATA%\VirtualTouchpad\touch.log`; use it to
+  diagnose with the user's real touches instead of guessing.
 
 ## Notes
 
-- The gesture engine (`src/TouchpadEngine.*`) only talks to the world through `TouchpadHost`; keep it
-  that way so it stays unit-testable. Add a test in `tests/` for new gesture behaviour.
-- Never launch `VirtualTouchpad.exe` to "test" it: a second launch toggles the running instance on/off.
-  Use `check-install.ps1` to see whether it's running.
-- UIAccess only works for the signed copy in Program Files, so touch behaviour can only be checked on the
-  installed app, by the user, on the touchscreen.
+- Keep pure logic (`Layout`, `TapDetector`) free of side effects and unit tested.
+- Don't launch `VirtualTouchpad.exe` to "test" it: a second launch toggles the running instance.

@@ -1,23 +1,24 @@
 #pragma once
 
-#include "DebugLog.h"
-#include "Overlays.h"
+#include "BuiltinTouchpad.h"
+#include "Osd.h"
+#include "RawTouch.h"
 #include "Settings.h"
-#include "TouchKeyboard.h"
-#include "TouchpadInjector.h"
-#include "TouchpadEngine.h"
-#include "Win32TouchpadHost.h"
+#include "TapDetector.h"
+#include "TaskbarButton.h"
 
 #include <windows.h>
 #include <shellapi.h>
 
-// Owns the hidden host window that all touch input is redirected to, the tray icon,
-// and the on/off state.
-//
-// When capturing, RegisterPointerInputTarget sends every touchscreen contact to this
-// window (no matter where on screen it lands), so nothing needs to cover the screen.
-// Otherwise the window only *observes* touch so it can spot the toggle gesture while
-// apps receive touch normally. Both calls require the UIAccess privilege.
+#include <memory>
+
+constexpr wchar_t kAppWindowClass[] = L"VirtualTouchpadApp";
+constexpr UINT WM_APP_TRAY = WM_APP + 1;         // tray icon callback
+constexpr UINT WM_APP_TOGGLE = WM_APP + 2;       // toggle (also posted by a second instance)
+constexpr UINT WM_APP_PRESS_RESULT = WM_APP + 3;  // outcome of pressing the taskbar touchpad button
+
+// Turns Windows' built-in virtual touchpad into an invisible full-screen touchpad and toggles it
+// with a four-finger tap (read from raw touchscreen input), Ctrl+Alt+T, or the tray icon.
 class App
 {
 public:
@@ -27,58 +28,42 @@ public:
     bool Create();
     int Run();
 
+    // Puts the touchpad window back to normal (used by the crash handler).
+    void RestoreTouchpad() { touchpad_.Restore(); }
+
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    static void CALLBACK OnWinEvent(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
-    void LogInputMessage(const char* stage, UINT msg, WPARAM wParam);
-    bool HandlePointer(UINT msg, WPARAM wParam);
-    void HandleRawInput(LPARAM lParam);
-    void PollKeyboard();
 
-    void SetEnabled(bool enabled, bool announce);
-    bool ApplyCapture();
-    bool CaptureTouch();
-    void ObserveTouch();
-    void ReleaseTouch();
-
+    void Toggle();
+    void LogTouch(const TapDetector::Summary& s);
+    void LogLine(const std::string& line); // diagnostics log, when LogTouch is on
     void AddTrayIcon();
     void UpdateTrayIcon();
     void ShowTrayMenu(POINT pt);
-    void ReloadSettings();
     bool StartsWithWindows() const;
     void SetStartWithWindows(bool on);
 
     HINSTANCE instance_;
     HWND hwnd_ = nullptr;
     Settings settings_;
-    Win32TouchpadHost host_;
-    TouchpadEngine engine_;
-    TouchKeyboard keyboard_;
-    TouchpadInjector injector_; // used while capturing in NativeTouchpad mode
-    bool native_ = false;       // capturing and feeding the virtual touchpad
-    ULONGLONG lastTouchTick_ = 0;
-    ActiveBorder border_;
+    BuiltinTouchpad touchpad_;
+    std::unique_ptr<TaskbarButton> button_; // opens/closes the touchpad, on its own thread
+    RawTouch rawTouch_;
+    TapDetector detector_;
     Osd osd_;
-    DebugLog log_;
 
-    bool enabled_ = false;           // the user wants the touchpad on
-    bool keyboardPassthrough_ = false; // touch keyboard is open, so touch goes straight to the screen
-    bool capturing_ = false;
-    enum class Registration { None, Capture, Observe } registration_ = Registration::None;
-    POINT lastTouch_{};
-
-    // While touch is redirected here, Windows shows this thread's cursor, so we mirror the shape
-    // that the app under the pointer last asked for (tracked with a WinEvent hook).
-    static void CALLBACK OnCursorEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD);
-    HWINEVENTHOOK cursorHook_ = nullptr;
-
-    // In NativeTouchpad mode Windows makes the clicks, so watch focus changes to spot taps into text fields.
-    static void CALLBACK OnFocusEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD);
-    HWINEVENTHOOK focusHook_ = nullptr;
-    HCURSOR appCursor_ = LoadCursorW(nullptr, IDC_ARROW);
+    HWINEVENTHOOK showHideHook_ = nullptr;
+    HWINEVENTHOOK cloakHook_ = nullptr;
+    HWINEVENTHOOK locationHook_ = nullptr;
 
     NOTIFYICONDATAW tray_{};
     HICON iconOn_ = nullptr;
     HICON iconOff_ = nullptr;
     UINT taskbarCreatedMsg_ = 0;
+    bool trayShowsOn_ = false;
+    ULONGLONG lastToggleTick_ = 0;
+    bool closing_ = false;        // exiting: waiting for the touchpad to close
+    ULONGLONG closeDeadline_ = 0; // after this, restore the touchpad window and exit anyway
 };

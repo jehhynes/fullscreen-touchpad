@@ -24,7 +24,6 @@ add_executable(VirtualTouchpad WIN32
     src/main.cpp
     src/App.cpp
     src/BuiltinTouchpad.cpp
-    src/TaskbarButton.cpp
     src/RawTouch.cpp
     src/Osd.cpp
     src/Settings.cpp
@@ -32,7 +31,7 @@ add_executable(VirtualTouchpad WIN32
 )
 target_compile_options(VirtualTouchpad PRIVATE ${VT_OPTIONS})
 target_link_options(VirtualTouchpad PRIVATE /MANIFESTUAC:NO) # trustInfo comes from app.manifest
-target_link_libraries(VirtualTouchpad PRIVATE touchpad_core user32 gdi32 shell32 shcore advapi32 ole32 oleaut32 uuid hid dwmapi)
+target_link_libraries(VirtualTouchpad PRIVATE touchpad_core user32 gdi32 shell32 shcore advapi32 ole32 hid dwmapi)
 
 if(VT_BUILD_TESTS)
     include(FetchContent)

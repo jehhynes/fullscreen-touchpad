@@ -6,9 +6,9 @@
 
 #include <climits>
 
-// Reshapes Windows' built-in virtual touchpad window into an invisible full-screen touchpad
-// (see Layout.h). Everything else, the pointer, taps, scrolling and gestures, is Windows' own.
-// Opening and closing it is TaskbarButton's job.
+// Opens and closes Windows' built-in virtual touchpad, and reshapes its window into an invisible
+// full-screen touchpad (see Layout.h). Everything else, the pointer, taps, scrolling and gestures,
+// is Windows' own.
 class BuiltinTouchpad
 {
 public:
@@ -24,6 +24,13 @@ public:
     // The touchpad's window, or null if it isn't open.
     static HWND FindTouchpadWindow();
     bool IsOpen() const { return FindTouchpadWindow() != nullptr; }
+
+    // Opens it through Windows' "ms-virtualtouchpad:" URL; does nothing if it's already open.
+    // Works without the taskbar, which hides its touchpad button when the keyboard is detached.
+    static bool Open();
+
+    // Closes it the way its own close button does. Returns false if it isn't open.
+    static bool Close();
 
     // Reshapes the touchpad window if it's open and not reshaped yet. Returns true if it's in shape.
     bool Apply();

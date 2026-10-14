@@ -13,7 +13,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
         return 0;
     }
 
-    // COM for UI Automation (pressing the taskbar's touchpad button).
+    // COM for ShellExecuteEx, which opens the touchpad through its URL protocol.
     const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
     int result = 1;

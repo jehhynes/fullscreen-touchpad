@@ -5,7 +5,6 @@
 #include "RawTouch.h"
 #include "Settings.h"
 #include "TapDetector.h"
-#include "TaskbarButton.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -15,7 +14,6 @@
 constexpr wchar_t kAppWindowClass[] = L"VirtualTouchpadApp";
 constexpr UINT WM_APP_TRAY = WM_APP + 1;         // tray icon callback
 constexpr UINT WM_APP_TOGGLE = WM_APP + 2;       // toggle (also posted by a second instance)
-constexpr UINT WM_APP_PRESS_RESULT = WM_APP + 3;  // outcome of pressing the taskbar touchpad button
 
 // Turns Windows' built-in virtual touchpad into an invisible full-screen touchpad and toggles it
 // with a four-finger tap (read from raw touchscreen input), Ctrl+Alt+T, or the tray icon.
@@ -49,7 +47,6 @@ private:
     HWND hwnd_ = nullptr;
     Settings settings_;
     BuiltinTouchpad touchpad_;
-    std::unique_ptr<TaskbarButton> button_; // opens/closes the touchpad, on its own thread
     RawTouch rawTouch_;
     TapDetector detector_;
     Osd osd_;

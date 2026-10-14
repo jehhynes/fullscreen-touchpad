@@ -116,7 +116,6 @@ bool App::Create()
     hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, kAppWindowClass, L"Virtual Touchpad", WS_POPUP, 0, 0, 0, 0, nullptr,
                             nullptr, instance_, this);
     if (!hwnd_) return false;
-    button_ = std::make_unique<TaskbarButton>(hwnd_, WM_APP_PRESS_RESULT);
     SetUnhandledExceptionFilter(OnCrash);
 
     taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
@@ -140,7 +139,7 @@ bool App::Create()
     AddTrayIcon();
 
     if (touchpad_.IsOpen()) touchpad_.Apply();
-    else if (settings_.StartEnabled) button_->Press();
+    else if (settings_.StartEnabled) BuiltinTouchpad::Open();
 
     SetTimer(hwnd_, kTapTimer, 50, nullptr);
     SetTimer(hwnd_, kShapeTimer, 250, nullptr);
@@ -256,24 +255,14 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         touchpad_.Apply();
         break;
 
-    case WM_APP_PRESS_RESULT:
-        if (settings_.LogTouch)
-            LogLine("press step=" + std::to_string(int(wParam)) + " hr=0x" + [&] {
-                char hex[16];
-                sprintf_s(hex, "%08lX", static_cast<unsigned long>(HRESULT(lParam)));
-                return std::string(hex);
-            }());
-        if (wParam != 0 && settings_.ShowOsd) osd_.Flash(L"Turn on the taskbar's touchpad icon");
-        return 0;
-
     case WM_CLOSE:
         // Don't leave an invisible touchpad behind whose pointer hole no longer follows the pointer:
-        // close it first. Keep pumping messages while it closes (blocking here deadlocked with Explorer).
+        // close it first, and wait (pumping messages) until it's gone.
         if (!closing_ && touchpad_.IsOpen())
         {
             closing_ = true;
             closeDeadline_ = GetTickCount64() + 2500;
-            button_->Press();
+            BuiltinTouchpad::Close();
             SetTimer(hwnd_, kExitTimer, 100, nullptr);
             return 0;
         }
@@ -311,9 +300,11 @@ void App::Toggle()
     lastToggleTick_ = now;
 
     const bool wasOn = touchpad_.IsOpen();
-    if (settings_.LogTouch) LogLine(wasOn ? "toggle: closing" : "toggle: opening");
-    button_->Press(); // the outcome arrives later as WM_APP_PRESS_RESULT
-    if (settings_.ShowOsd) osd_.Flash(wasOn ? L"Touchpad off" : L"Touchpad on");
+    const bool ok = wasOn ? BuiltinTouchpad::Close() : BuiltinTouchpad::Open();
+    if (settings_.LogTouch)
+        LogLine(std::string(wasOn ? "toggle: closing" : "toggle: opening") + " ok=" + (ok ? "1" : "0") +
+                " error=" + std::to_string(ok ? 0 : GetLastError()));
+    if (settings_.ShowOsd) osd_.Flash(!ok ? L"Couldn't toggle the touchpad" : wasOn ? L"Touchpad off" : L"Touchpad on");
 }
 
 void App::LogTouch(const TapDetector::Summary& s)

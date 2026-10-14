@@ -6,11 +6,12 @@ over your content. A real mouse and pen keep working normally.
 
 ## How it works
 
-It reuses **Windows' built-in virtual touchpad** (the taskbar's touchpad button) and reshapes its
-window. Windows' own touchpad then does everything: pointer movement, taps, scrolling and
-gestures, with your touchpad settings and no cursor flicker. The app:
+It reuses **Windows' built-in virtual touchpad** and reshapes its window. Windows' own touchpad
+then does everything: pointer movement, taps, scrolling and gestures, with your touchpad settings
+and no cursor flicker. The app:
 
-- opens and closes the built-in touchpad by pressing its taskbar button (UI Automation);
+- opens the built-in touchpad through Windows' `ms-virtualtouchpad:` URL and closes it with its own
+  close command, so it works even when the taskbar is hidden (e.g. with the keyboard detached);
 - stretches its window over the whole screen and makes it invisible (opacity 1/255);
 - pushes its title bar above the screen and its click buttons below it;
 - limits where it receives touch with a window region: the work area, minus thin strips at the
@@ -26,15 +27,13 @@ gestures, with your touchpad settings and no cursor flicker. The app:
 | Ctrl+Alt+T, or tap the app's tray icon | Same |
 | Everything else | Windows' touchpad gestures: move, tap, two-finger scroll and right-click, and so on |
 
-Requirements:
+Setup:
 
-- **The taskbar must show the touchpad button:** Settings → Personalization → Taskbar → System tray
-  icons → Virtual touchpad.
 - **Set Windows' own four-finger tap to "Nothing"**, so it doesn't also fire when you toggle:
   Settings → Bluetooth & devices → Touchpad → Three- and four-finger gestures.
 - Pointer speed and tap behaviour come from Settings → Bluetooth & devices → Touchpad.
-
-The taskbar's touchpad button only matches the English name "Virtual Touchpad" for now.
+- While the app runs, the built-in touchpad always opens full screen and invisible, however it's
+  opened. Without the app it's Windows' normal touchpad.
 
 ## Build, test, install
 

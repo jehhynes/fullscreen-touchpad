@@ -33,8 +33,11 @@ Only then report completion, saying what was verified and what still needs the u
   what the user sees. Don't claim visual results from them.
 - Never leave the user without a way out: they may have no keyboard. Every mode must be switchable off
   by touch (the taskbar stays uncovered, and the four-finger tap toggles).
-- No UI Automation calls on the UI thread (they deadlock); `TaskbarButton` runs them on its own thread.
-- The built-in touchpad closes by being cloaked, not hidden: "open" means visible and not cloaked.
+- Open the touchpad with the `ms-virtualtouchpad:` URL and close it with `WM_SYSCOMMAND`/`SC_CLOSE`. Pressing the
+  taskbar button (UI Automation) failed when the keyboard was detached (the touch taskbar hides it) and
+  deadlocked on the UI thread.
+- Closing the built-in touchpad destroys its window; each open creates a new one, so nothing we change
+  persists. "Open" means visible and not cloaked.
 - PowerShell traps when testing: `$null` passed to a string parameter becomes `""` (use `[NullString]::Value`),
   and `if ([IntPtr]::Zero)` is true (compare with `-ne [IntPtr]::Zero`).
 - `LogTouch=true` writes touches and toggle outcomes to `%LOCALAPPDATA%\VirtualTouchpad\touch.log`; use it to

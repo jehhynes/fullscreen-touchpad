@@ -1,6 +1,7 @@
 #include "BuiltinTouchpad.h"
 
 #include <dwmapi.h>
+#include <shellapi.h>
 #include <shellscalingapi.h>
 
 #include <algorithm>
@@ -53,6 +54,22 @@ HWND BuiltinTouchpad::FindTouchpadWindow()
     HWND found = nullptr;
     EnumWindows(FindProc, reinterpret_cast<LPARAM>(&found));
     return found;
+}
+
+bool BuiltinTouchpad::Open()
+{
+    SHELLEXECUTEINFOW sei{ sizeof(sei) };
+    sei.fMask = SEE_MASK_ASYNCOK | SEE_MASK_FLAG_NO_UI;
+    sei.lpVerb = L"open";
+    sei.lpFile = L"ms-virtualtouchpad:";
+    sei.nShow = SW_SHOWNOACTIVATE;
+    return ShellExecuteExW(&sei) != FALSE;
+}
+
+bool BuiltinTouchpad::Close()
+{
+    HWND hwnd = FindTouchpadWindow();
+    return hwnd && PostMessageW(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
 }
 
 layout::Params BuiltinTouchpad::LayoutFor(HWND) const

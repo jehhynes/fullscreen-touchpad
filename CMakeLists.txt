@@ -9,7 +9,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 option(VT_BUILD_TESTS "Build unit tests" ON)
 
-set(VT_DEFINES UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00 NTDDI_VERSION=0x0A000000)
+set(VT_DEFINES UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00 NTDDI_VERSION=0x0A00000C) # Windows 11 (NTDDI_WIN10_CO)
 set(VT_OPTIONS /W4 /permissive- /utf-8)
 
 # Gesture engine: pure logic behind the TouchpadHost interface, so it can be unit tested.
@@ -22,6 +22,7 @@ add_executable(VirtualTouchpad WIN32
     src/main.cpp
     src/App.cpp
     src/Win32TouchpadHost.cpp
+    src/TouchpadInjector.cpp
     src/InputSender.cpp
     src/TouchKeyboard.cpp
     src/Settings.cpp
@@ -41,6 +42,12 @@ add_executable(touchprobe tools/touchprobe.cpp)
 target_compile_options(touchprobe PRIVATE ${VT_OPTIONS})
 target_compile_definitions(touchprobe PRIVATE ${VT_DEFINES})
 target_link_libraries(touchprobe PRIVATE user32 gdi32 winmm)
+
+# Diagnostic: checks whether a synthetic precision touchpad (PT_TOUCHPAD injection) works here.
+add_executable(touchpadprobe tools/touchpadprobe.cpp)
+target_compile_options(touchpadprobe PRIVATE ${VT_OPTIONS})
+target_compile_definitions(touchpadprobe PRIVATE ${VT_DEFINES})
+target_link_libraries(touchpadprobe PRIVATE user32)
 
 if(VT_BUILD_TESTS)
     include(FetchContent)

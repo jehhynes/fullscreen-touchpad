@@ -203,10 +203,107 @@ static int EdgeSwipeTest(int startBelowEdge)
     return changed > 0.05 ? 0 : 2;
 }
 
+// Saves a screen region as a 24-bit BMP, with the logical cursor drawn in (BitBlt omits it).
+static void SaveScreenshot(const wchar_t* path, RECT r)
+{
+    const int w = r.right - r.left, h = r.bottom - r.top;
+    HDC screen = GetDC(nullptr);
+    HDC mem = CreateCompatibleDC(screen);
+    BITMAPINFO bi{};
+    bi.bmiHeader = BITMAPINFOHEADER{ sizeof(BITMAPINFOHEADER), w, h, 1, 24, BI_RGB };
+    void* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    BitBlt(mem, 0, 0, w, h, screen, r.left, r.top, SRCCOPY | CAPTUREBLT);
+    CURSORINFO ci{ sizeof(ci) };
+    if (GetCursorInfo(&ci) && ci.hCursor && (ci.flags & CURSOR_SHOWING))
+    {
+        ICONINFO ii{};
+        GetIconInfo(ci.hCursor, &ii);
+        DrawIconEx(mem, ci.ptScreenPos.x - r.left - int(ii.xHotspot), ci.ptScreenPos.y - r.top - int(ii.yHotspot),
+                   ci.hCursor, 0, 0, 0, nullptr, DI_NORMAL);
+        if (ii.hbmMask) DeleteObject(ii.hbmMask);
+        if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    }
+    GdiFlush();
+    const DWORD stride = DWORD((w * 3 + 3) & ~3), size = stride * DWORD(h);
+    BITMAPFILEHEADER fh{ 0x4D42, DWORD(sizeof(fh) + sizeof(BITMAPINFOHEADER) + size), 0, 0,
+                         DWORD(sizeof(fh) + sizeof(BITMAPINFOHEADER)) };
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path, L"wb") == 0 && f)
+    {
+        fwrite(&fh, sizeof(fh), 1, f);
+        fwrite(&bi.bmiHeader, sizeof(BITMAPINFOHEADER), 1, f);
+        fwrite(bits, 1, size, f);
+        fclose(f);
+    }
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+}
+
+// "hold" mode: injects a touch WITH default touch feedback, moves it, then holds it still, taking
+// screenshots before the touch, while moving, and while held, into the directory given as argv[2].
+static int HoldTest(const wchar_t* dir)
+{
+    if (!InitializeTouchInjection(1, TOUCH_FEEDBACK_DEFAULT))
+    {
+        std::printf("InitializeTouchInjection failed: %lu\n", GetLastError());
+        return 1;
+    }
+    const RECT full{ GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
+                     GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                     GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    auto shot = [&](const wchar_t* name) {
+        wchar_t path[MAX_PATH];
+        swprintf_s(path, L"%s\\%s.bmp", dir, name);
+        SaveScreenshot(path, full);
+    };
+
+    POINTER_TOUCH_INFO contact{};
+    contact.pointerInfo.pointerType = PT_TOUCH;
+    contact.touchMask = TOUCH_MASK_CONTACTAREA | TOUCH_MASK_ORIENTATION | TOUCH_MASK_PRESSURE;
+    contact.orientation = 90;
+    contact.pressure = 32000;
+    const POINTER_FLAGS kUpdate = POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT;
+
+    Stats stats;
+    const int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+    POINT p{ sw / 2 - 150, sh / 2 };
+    shot(L"1-before");
+    if (!Inject(contact, p, POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT)) return 1;
+    for (int i = 0; i < 20; ++i)
+    {
+        PumpAndSample(16, p, stats);
+        p.x += 15;
+        if (!Inject(contact, p, kUpdate)) return 1;
+        if (i == 15) shot(L"2-moving");
+    }
+    for (int i = 0; i < 60; ++i) // hold still ~1 s, still sending updates as a real digitizer does
+    {
+        PumpAndSample(16, p, stats);
+        if (!Inject(contact, p, kUpdate)) return 1;
+        if (i == 45) shot(L"3-holding");
+    }
+    if (!Inject(contact, p, POINTER_FLAG_UP)) return 1;
+    PumpAndSample(300, p, stats);
+    shot(L"4-after");
+    std::printf("touch held at %ld,%ld; cursor visible-at-touch samples %d of %d\n", p.x, p.y,
+                stats.visibleAtTouch, stats.samples);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     timeBeginPeriod(1); // 1 ms sampling
+    if (argc > 2 && std::strcmp(argv[1], "hold") == 0)
+    {
+        wchar_t dir[MAX_PATH];
+        MultiByteToWideChar(CP_ACP, 0, argv[2], -1, dir, MAX_PATH);
+        return HoldTest(dir);
+    }
     if (argc > 1 && std::strcmp(argv[1], "edge") == 0) return EdgeSwipeTest(argc > 2 ? std::atoi(argv[2]) : 0);
     const int strokes = argc > 1 ? std::atoi(argv[1]) : 3;
 

@@ -6,6 +6,11 @@
 // Distances are pixels at 100% display scaling and are scaled by the monitor DPI at runtime.
 struct Settings
 {
+    // Feed touches to a virtual precision touchpad so Windows' own touchpad stack does pointer
+    // movement, clicks, scrolling and gestures (Windows 11). When false, or unavailable, the app's
+    // own gesture engine and the settings below are used instead.
+    bool NativeTouchpad = true;
+
     // Pointer movement
     double Sensitivity = 1.2;       // cursor px per finger px at slow speeds
     double Acceleration = 0.6;      // extra gain per (finger px/ms) of speed

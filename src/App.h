@@ -4,6 +4,7 @@
 #include "Overlays.h"
 #include "Settings.h"
 #include "TouchKeyboard.h"
+#include "TouchpadInjector.h"
 #include "TouchpadEngine.h"
 #include "Win32TouchpadHost.h"
 
@@ -53,6 +54,9 @@ private:
     Win32TouchpadHost host_;
     TouchpadEngine engine_;
     TouchKeyboard keyboard_;
+    TouchpadInjector injector_; // used while capturing in NativeTouchpad mode
+    bool native_ = false;       // capturing and feeding the virtual touchpad
+    ULONGLONG lastTouchTick_ = 0;
     ActiveBorder border_;
     Osd osd_;
     DebugLog log_;
@@ -67,6 +71,10 @@ private:
     // that the app under the pointer last asked for (tracked with a WinEvent hook).
     static void CALLBACK OnCursorEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD);
     HWINEVENTHOOK cursorHook_ = nullptr;
+
+    // In NativeTouchpad mode Windows makes the clicks, so watch focus changes to spot taps into text fields.
+    static void CALLBACK OnFocusEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD);
+    HWINEVENTHOOK focusHook_ = nullptr;
     HCURSOR appCursor_ = LoadCursorW(nullptr, IDC_ARROW);
 
     NOTIFYICONDATAW tray_{};

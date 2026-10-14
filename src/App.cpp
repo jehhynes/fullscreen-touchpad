@@ -1,4 +1,5 @@
 #include "App.h"
+#include "InputSender.h"
 #include "Messages.h"
 
 #include <windowsx.h>
@@ -165,6 +166,8 @@ bool App::Create()
     g_app = this;
     cursorHook_ = SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, nullptr, OnCursorEvent, 0, 0,
                                   WINEVENT_OUTOFCONTEXT);
+    focusHook_ = SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS, nullptr, OnFocusEvent, 0, 0,
+                                 WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
     // Raw mouse input comes only from physical mice and touchpads (not from touch, and not
     // from our own SendInput), so it tells us when to adopt the real cursor position.
@@ -316,6 +319,8 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_DESTROY:
         if (cursorHook_) UnhookWinEvent(cursorHook_);
+        if (focusHook_) UnhookWinEvent(focusHook_);
+        injector_.Destroy();
         engine_.Reset();
         ReleaseTouch();
         border_.Hide();
@@ -356,6 +361,21 @@ bool App::HandlePointer(UINT msg, WPARAM wParam)
     const POINT p = info.ptPixelLocation;
     const bool canceled = (info.pointerFlags & POINTER_FLAG_CANCELED) != 0;
     lastTouch_ = p;
+    lastTouchTick_ = GetTickCount64();
+
+    // Native mode: hand the whole frame to the virtual touchpad.
+    if (native_)
+    {
+        injector_.OnPointerMessage(id);
+        // A touch-down hides the cursor until the touchpad stack starts moving it (~100 ms later);
+        // mouse input at the current position shows it again straight away.
+        if (msg == WM_POINTERDOWN)
+        {
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            input::MoveCursorTo(cursor);
+        }
+    }
 
     switch (msg)
     {
@@ -389,6 +409,14 @@ bool App::HandlePointer(UINT msg, WPARAM wParam)
                        before.x, before.y, p.x, p.y, after.x, after.y);
     }
     return true;
+}
+
+void CALLBACK App::OnFocusEvent(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD)
+{
+    // Only focus changes caused by the touchpad (a touch within the last second) count as a tap.
+    if (!g_app || !g_app->native_ || !g_app->settings_.ShowKeyboardForTextFields) return;
+    if (GetTickCount64() - g_app->lastTouchTick_ > 1000) return;
+    g_app->keyboard_.CheckFocusSoon();
 }
 
 void CALLBACK App::OnCursorEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD thread, DWORD)
@@ -468,9 +496,21 @@ bool App::ApplyCapture()
     if (!capture || !ok) ObserveTouch();
 
     capturing_ = capture && ok;
-    engine_.SetObserveOnly(!capturing_);
-    log_.Write("state   enabled=%d keyboardPassthrough=%d capture=%d ok=%d error=%lu registration=%d",
-               enabled_, keyboardPassthrough_, capture, ok, error, int(registration_));
+
+    // Native mode: Windows' touchpad stack does everything; our engine only watches for the toggle.
+    native_ = false;
+    if (capturing_ && settings_.NativeTouchpad)
+    {
+        POINT primary{ 0, 0 };
+        native_ = injector_.Ready() || injector_.Create(MonitorFromPoint(primary, MONITOR_DEFAULTTOPRIMARY));
+    }
+    else
+    {
+        injector_.Destroy();
+    }
+    engine_.SetObserveOnly(!capturing_ || native_);
+    log_.Write("state   enabled=%d keyboardPassthrough=%d capture=%d ok=%d error=%lu registration=%d native=%d",
+               enabled_, keyboardPassthrough_, capture, ok, error, int(registration_), native_);
 
     if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
     else border_.Hide();

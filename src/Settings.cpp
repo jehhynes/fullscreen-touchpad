@@ -24,7 +24,7 @@ namespace
     };
 
     const BoolField kBools[] = {
-        BOOL_(TapToClick), BOOL_(LongPressRightClick), BOOL_(ShowKeyboardForTextFields), BOOL_(TypeDirectlyOnKeyboard),
+        BOOL_(NativeTouchpad), BOOL_(TapToClick), BOOL_(LongPressRightClick), BOOL_(ShowKeyboardForTextFields), BOOL_(TypeDirectlyOnKeyboard),
         BOOL_(NaturalScrolling), BOOL_(KineticScrolling), BOOL_(PinchZoom),
         BOOL_(StartEnabled), BOOL_(ShowBorder), BOOL_(ShowOsd), BOOL_(DebugLog),
     };

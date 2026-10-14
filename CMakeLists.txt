@@ -40,7 +40,7 @@ target_link_libraries(VirtualTouchpad PRIVATE touchpad_core user32 gdi32 shell32
 add_executable(touchprobe tools/touchprobe.cpp)
 target_compile_options(touchprobe PRIVATE ${VT_OPTIONS})
 target_compile_definitions(touchprobe PRIVATE ${VT_DEFINES})
-target_link_libraries(touchprobe PRIVATE user32)
+target_link_libraries(touchprobe PRIVATE user32 gdi32 winmm)
 
 if(VT_BUILD_TESTS)
     include(FetchContent)

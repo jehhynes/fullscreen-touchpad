@@ -8,6 +8,7 @@
 // Exit code: 0 = cursor never seen at the touch point, 2 = it was (flicker reproduced), 1 = error.
 
 #include <windows.h>
+#include <mmsystem.h>
 
 #include <cmath>
 #include <cstdio>
@@ -49,15 +50,43 @@ namespace
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
+    const char* ShapeName(HCURSOR c)
+    {
+        if (!c) return "none";
+        if (c == LoadCursorW(nullptr, IDC_ARROW)) return "arrow";
+        if (c == LoadCursorW(nullptr, IDC_IBEAM)) return "ibeam";
+        if (c == LoadCursorW(nullptr, IDC_WAIT)) return "WAIT";
+        if (c == LoadCursorW(nullptr, IDC_APPSTARTING)) return "APPSTARTING";
+        return "other";
+    }
+
     struct Stats
     {
         int samples = 0;
         int atTouch = 0;        // cursor within 3 px of the finger
         int visibleAtTouch = 0; // ...and drawn (not hidden/suppressed)
+        int hiddenSamples = 0;  // cursor suppressed or not showing
+        int visibilityChanges = 0;
+        int shapeChanges = 0;
+        int positionJumps = 0;  // moves of more than 40 px between consecutive samples
+        bool havePrev = false;
+        CURSORINFO prev{};
+        int printed = 0;
     };
+
+    double NowMs()
+    {
+        LARGE_INTEGER f, c;
+        QueryPerformanceFrequency(&f);
+        QueryPerformanceCounter(&c);
+        return double(c.QuadPart) * 1000.0 / double(f.QuadPart);
+    }
+
+    bool Visible(const CURSORINFO& ci) { return (ci.flags & CURSOR_SHOWING) && !(ci.flags & 0x2 /* CURSOR_SUPPRESSED */); }
 
     void PumpAndSample(DWORD ms, POINT touch, Stats& stats)
     {
+        static const double t0 = NowMs();
         const ULONGLONG end = GetTickCount64() + ms;
         do
         {
@@ -70,11 +99,31 @@ namespace
             CURSORINFO ci{ sizeof(ci) };
             GetCursorInfo(&ci);
             ++stats.samples;
+            if (!Visible(ci)) ++stats.hiddenSamples;
             if (std::abs(ci.ptScreenPos.x - touch.x) <= 3 && std::abs(ci.ptScreenPos.y - touch.y) <= 3)
             {
                 ++stats.atTouch;
-                if ((ci.flags & CURSOR_SHOWING) && !(ci.flags & 0x2 /* CURSOR_SUPPRESSED */)) ++stats.visibleAtTouch;
+                if (Visible(ci)) ++stats.visibleAtTouch;
             }
+            if (stats.havePrev)
+            {
+                const bool vis = Visible(ci) != Visible(stats.prev);
+                const bool shape = ci.hCursor != stats.prev.hCursor;
+                const bool jump = std::abs(ci.ptScreenPos.x - stats.prev.ptScreenPos.x) +
+                                  std::abs(ci.ptScreenPos.y - stats.prev.ptScreenPos.y) > 40;
+                stats.visibilityChanges += vis;
+                stats.shapeChanges += shape;
+                stats.positionJumps += jump;
+                if ((vis || shape || jump) && stats.printed < 60)
+                {
+                    ++stats.printed;
+                    std::printf("  %8.1f ms  pos %ld,%ld  %s  shape=%s  (touch %ld,%ld)\n", NowMs() - t0,
+                                ci.ptScreenPos.x, ci.ptScreenPos.y, Visible(ci) ? "visible" : "HIDDEN",
+                                ShapeName(ci.hCursor), touch.x, touch.y);
+                }
+            }
+            stats.prev = ci;
+            stats.havePrev = true;
             Sleep(1);
         } while (GetTickCount64() < end);
     }
@@ -157,6 +206,7 @@ static int EdgeSwipeTest(int startBelowEdge)
 int main(int argc, char** argv)
 {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    timeBeginPeriod(1); // 1 ms sampling
     if (argc > 1 && std::strcmp(argv[1], "edge") == 0) return EdgeSwipeTest(argc > 2 ? std::atoi(argv[2]) : 0);
     const int strokes = argc > 1 ? std::atoi(argv[1]) : 3;
 
@@ -225,6 +275,8 @@ int main(int argc, char** argv)
                 g_probeWindowTouches ? "(touch was NOT captured by the touchpad app)" : "(touch was captured)");
     std::printf("samples %d, cursor at touch point %d, of which visible %d\n", stats.samples, stats.atTouch,
                 stats.visibleAtTouch);
+    std::printf("hidden samples %d, visibility changes %d, shape changes %d, position jumps %d\n",
+                stats.hiddenSamples, stats.visibilityChanges, stats.shapeChanges, stats.positionJumps);
 
     if (g_probeWindowTouches) return 1;
     return stats.atTouch ? 2 : 0;

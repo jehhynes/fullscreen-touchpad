@@ -164,7 +164,7 @@ bool App::Create()
     // Cursor shape changes by other apps (see Raymond Chen, "How can I be notified when the cursor changes?").
     g_app = this;
     cursorHook_ = SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, nullptr, OnCursorEvent, 0, 0,
-                                  WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+                                  WINEVENT_OUTOFCONTEXT);
 
     // Raw mouse input comes only from physical mice and touchpads (not from touch, and not
     // from our own SendInput), so it tells us when to adopt the real cursor position.
@@ -391,11 +391,18 @@ bool App::HandlePointer(UINT msg, WPARAM wParam)
     return true;
 }
 
-void CALLBACK App::OnCursorEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD)
+void CALLBACK App::OnCursorEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD thread, DWORD)
 {
     if (!g_app || hwnd != nullptr || idObject != OBJID_CURSOR || idChild != CHILDID_SELF) return;
+    // The event arrives asynchronously, so the cursor showing now may already be ours again (the next
+    // touch frame makes our thread the cursor owner). Events are attributed to a system thread, so the
+    // only reliable test is: a shape different from our own thread's cursor must be the app's.
     CURSORINFO ci{ sizeof(ci) };
-    if (GetCursorInfo(&ci) && ci.hCursor) g_app->appCursor_ = ci.hCursor;
+    if (GetCursorInfo(&ci) && ci.hCursor && ci.hCursor != GetCursor())
+    {
+        g_app->appCursor_ = ci.hCursor;
+        g_app->log_.Write("cursorev app shape=%s (thread %lu)", CursorName(ci.hCursor), thread);
+    }
 }
 
 void App::HandleRawInput(LPARAM lParam)

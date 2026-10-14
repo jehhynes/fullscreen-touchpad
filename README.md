@@ -51,16 +51,15 @@ Or use the CMake presets directly: `cmake --preset vs` then `cmake --build --pre
 
 ## Install
 
-From an **elevated** PowerShell:
-
-```powershell
-.\scripts\install.ps1 -StartWithWindows
-```
+Double-click `scripts\install.cmd`, or run `scripts\install.cmd -StartWithWindows` to also start
+it at sign-in. It asks for admin rights and runs `install.ps1` with the execution policy bypassed
+for that run only, so you don't need to change your system policy. From an elevated PowerShell you
+can also run `.\scripts\install.ps1 -StartWithWindows` directly.
 
 This signs the exe with a freshly generated, single-use certificate. It trusts that certificate
 machine-wide, then deletes its private key so nothing else can be signed with it. It also installs
 to `C:\Program Files\VirtualTouchpad`, adds a Start menu shortcut, and starts the app. Re-run it
-after every rebuild. `.\scripts\uninstall.ps1` removes everything, including the certificate.
+after every rebuild. `scripts\uninstall.cmd` removes everything, including the certificate.
 
 ## Settings
 

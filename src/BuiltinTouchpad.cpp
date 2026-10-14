@@ -45,7 +45,7 @@ namespace
     bool SameLayout(const layout::Params& a, const layout::Params& b)
     {
         return EqualRect(&a.monitor, &b.monitor) && EqualRect(&a.work, &b.work) && a.scale == b.scale &&
-               a.edgeGap == b.edgeGap && a.holeRadius == b.holeRadius;
+               a.edgeGap == b.edgeGap && a.holeRadius == b.holeRadius && EqualRect(&a.keyboard, &b.keyboard);
     }
 }
 
@@ -87,6 +87,7 @@ layout::Params BuiltinTouchpad::LayoutFor(HWND) const
     p.scale = dpiX / 96.0;
     p.edgeGap = options_.edgeGap;
     p.holeRadius = std::max(1, int(std::lround(options_.holeRadius * p.scale)));
+    p.keyboard = keyboard_;
     return p;
 }
 
@@ -140,6 +141,16 @@ void BuiltinTouchpad::Restore()
     SetWindowPos(hwnd, nullptr, originalRect_.left, originalRect_.top, originalRect_.right - originalRect_.left,
                  originalRect_.bottom - originalRect_.top,
                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_FRAMECHANGED);
+}
+
+void BuiltinTouchpad::SetKeyboardRect(const RECT& keyboard)
+{
+    if (EqualRect(&keyboard, &keyboard_)) return;
+    keyboard_ = keyboard;
+    if (!shaped_) return;
+    params_.keyboard = keyboard_;
+    lastCursor_ = POINT{ LONG_MIN, LONG_MIN }; // rebuild the region now
+    UpdatePointerHole();
 }
 
 void BuiltinTouchpad::UpdatePointerHole()

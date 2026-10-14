@@ -41,6 +41,9 @@ public:
     // Moves the pointer hole to the current cursor position.
     void UpdatePointerHole();
 
+    // Where the on-screen touch keyboard is (empty if hidden); that area is left uncovered.
+    void SetKeyboardRect(const RECT& keyboard);
+
     // Puts the touchpad window back as it was (size, region, opacity). Used when it can't be closed,
     // so the user is never left with an invisible window covering the screen.
     void Restore();
@@ -52,6 +55,7 @@ private:
     HWND shaped_ = nullptr; // the window we last reshaped
     layout::Params params_{};
     POINT lastCursor_{ LONG_MIN, LONG_MIN };
+    RECT keyboard_{};
 
     HWND original_ = nullptr;
     RECT originalRect_{};

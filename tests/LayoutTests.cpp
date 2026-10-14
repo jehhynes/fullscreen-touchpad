@@ -108,3 +108,19 @@ TEST(Layout, OffsetsScaleWithDpi)
     EXPECT_EQ(w.top, -60);           // 40 dip
     EXPECT_EQ(w.bottom, 1728 + 525); // 350 dip
 }
+
+TEST(Layout, TouchKeyboardIsLeftUncoveredWhileShowing)
+{
+    layout::Params p = Surface();
+    p.keyboard = RECT{ 0, 1100, 2736, 1728 }; // docked keyboard along the bottom of the work area
+    const RECT window = layout::WindowRect(p);
+    HRGN region = layout::CreateRegion(p, POINT{ 1000, 500 });
+    EXPECT_FALSE(InRegion(region, window, POINT{ 1368, 1400 })); // a key
+    EXPECT_TRUE(InRegion(region, window, POINT{ 1368, 900 }));   // above the keyboard is still touchpad
+    DeleteObject(region);
+
+    p.keyboard = RECT{}; // hidden again
+    region = layout::CreateRegion(p, POINT{ 1000, 500 });
+    EXPECT_TRUE(InRegion(region, window, POINT{ 1368, 1400 }));
+    DeleteObject(region);
+}

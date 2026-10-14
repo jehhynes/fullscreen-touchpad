@@ -42,14 +42,15 @@ namespace layout
         HRGN region = CreateRectRgn(touch.left - window.left, touch.top - window.top, touch.right - window.left,
                                     touch.bottom - window.top);
 
-        const RECT hole = PointerHole(p, cursor);
-        if (hole.right > hole.left && hole.bottom > hole.top)
-        {
-            HRGN holeRegion = CreateRectRgn(hole.left - window.left, hole.top - window.top, hole.right - window.left,
-                                            hole.bottom - window.top);
-            CombineRgn(region, region, holeRegion, RGN_DIFF);
-            DeleteObject(holeRegion);
-        }
+        auto cutOut = [&](const RECT& r) {
+            if (r.right <= r.left || r.bottom <= r.top) return;
+            HRGN cut = CreateRectRgn(r.left - window.left, r.top - window.top, r.right - window.left,
+                                     r.bottom - window.top);
+            CombineRgn(region, region, cut, RGN_DIFF);
+            DeleteObject(cut);
+        };
+        cutOut(p.keyboard);
+        cutOut(PointerHole(p, cursor));
         return region;
     }
 }

@@ -7,8 +7,9 @@
 // The window is made taller than the screen and shifted up, so its title bar (with the close
 // button) sits above the screen and its two click buttons sit below it. Its window region then
 // limits the touchable part to the work area, minus thin strips at the left, right and bottom
-// edges (so Windows' edge swipes still reach the shell) and minus a small hole under the mouse
-// pointer (so clicks, hover and scrolling at the pointer reach the app underneath).
+// edges (so Windows' edge swipes still reach the shell), minus the on-screen touch keyboard while
+// it's showing, and minus a small hole under the mouse pointer (so clicks, hover and scrolling at
+// the pointer reach the app underneath).
 namespace layout
 {
     struct Params
@@ -20,6 +21,7 @@ namespace layout
         int extraBottomDip = 350;  // how far the click buttons are pushed below the work area
         int edgeGap = 2;           // uncovered strip at the left, right and bottom edges (pixels)
         int holeRadius = 3;        // half-size of the uncovered square under the pointer (pixels)
+        RECT keyboard{};           // on-screen touch keyboard, left uncovered so it can be typed on (empty if hidden)
     };
 
     // Window rectangle, in screen coordinates.

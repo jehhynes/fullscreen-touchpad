@@ -15,8 +15,11 @@ and no cursor flicker. The app:
 - stretches its window over the whole screen and makes it invisible (opacity 1/255);
 - pushes its title bar above the screen and its click buttons below it;
 - limits where it receives touch with a window region: the work area, minus thin strips at the
-  left, right and bottom edges so Windows' edge swipes still work, and minus a small hole under the
-  mouse pointer that follows it, so clicks, hover and scrolling at the pointer reach the app under it;
+  left, right and bottom edges so Windows' edge swipes still work, minus the on-screen keyboard
+  while it's showing so you can type on it, and minus a small hole under the mouse pointer that
+  follows it, so clicks, hover and scrolling at the pointer reach the app under it;
+- shows the on-screen keyboard when focus moves into a text field (with no hardware keyboard
+  attached), since Windows only does that for direct touch;
 - watches the touchscreen through Raw Input (read-only, no special privileges) for the toggle tap.
 
 ## Using it
@@ -52,8 +55,11 @@ After a rebuild, `.\scripts\deploy.ps1` installs and restarts the new build, and
 
 Tray icon → *Edit settings…* opens `%APPDATA%\VirtualTouchpad\settings.ini`; restart the app after
 editing. Options: `StartEnabled`, `ToggleFingers`, `ToggleMaxMs`, `Opacity`, `EdgeGap`, `PointerHole`,
-`ShowOsd`, and `LogTouch` (diagnostics: writes each touch and toggle to
-`%LOCALAPPDATA%\VirtualTouchpad\touch.log`).
+`ShowOsd`, `ShowKeyboardForTextFields`, and `LogTouch` (diagnostics: writes each touch, toggle and
+keyboard position to `%LOCALAPPDATA%\VirtualTouchpad\touch.log`).
+
+Showing the keyboard uses Windows' undocumented `ITipInvocation` interface, which many tools rely on
+but which could change in a Windows update.
 
 Note that the four-finger tap is also seen by whatever is under your fingers: turning the touchpad on
 with it taps the app underneath.

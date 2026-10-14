@@ -5,9 +5,12 @@
 #include "RawTouch.h"
 #include "Settings.h"
 #include "TapDetector.h"
+#include "TextFieldKeyboard.h"
 
 #include <windows.h>
 #include <shellapi.h>
+#include <shobjidl_core.h>
+#include <wrl/client.h>
 
 #include <memory>
 
@@ -50,6 +53,14 @@ private:
     RawTouch rawTouch_;
     TapDetector detector_;
     Osd osd_;
+
+    // Where the on-screen touch keyboard is, so the touchpad can leave it uncovered.
+    void UpdateKeyboardRect();
+    Microsoft::WRL::ComPtr<IFrameworkInputPane> inputPane_;
+    RECT loggedKeyboard_{};
+
+    TextFieldKeyboard textFieldKeyboard_;
+    HWINEVENTHOOK focusHook_ = nullptr;
 
     HWINEVENTHOOK showHideHook_ = nullptr;
     HWINEVENTHOOK cloakHook_ = nullptr;

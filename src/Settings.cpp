@@ -21,6 +21,7 @@ namespace
     const BoolField kBools[] = {
         { L"StartEnabled", &Settings::StartEnabled },
         { L"ShowOsd", &Settings::ShowOsd },
+        { L"ShowKeyboardForTextFields", &Settings::ShowKeyboardForTextFields },
         { L"LogTouch", &Settings::LogTouch },
     };
 

@@ -16,6 +16,7 @@ namespace
     constexpr UINT_PTR kTapTimer = 1;   // ends touch sessions for tap detection
     constexpr UINT_PTR kShapeTimer = 2; // keeps the touchpad in shape and the tray icon current (backstop for events)
     constexpr UINT_PTR kExitTimer = 3;  // waits for the touchpad to close before exiting
+    constexpr UINT_PTR kKeyboardTimer = 4; // follows the on-screen touch keyboard
 
     // If the app crashes, put the touchpad window back so the user isn't left with an invisible one.
     LONG WINAPI OnCrash(EXCEPTION_POINTERS*)
@@ -133,6 +134,10 @@ bool App::Create()
                                  WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     locationHook_ = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, OnWinEvent, 0,
                                     0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    // Focus moving into a text field while the touchpad is on: show the touch keyboard.
+    if (settings_.ShowKeyboardForTextFields)
+        focusHook_ = SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS, nullptr, OnWinEvent, 0, 0,
+                                     WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
     iconOn_ = MakeTrayIcon(true);
     iconOff_ = MakeTrayIcon(false);
@@ -143,6 +148,7 @@ bool App::Create()
 
     SetTimer(hwnd_, kTapTimer, 50, nullptr);
     SetTimer(hwnd_, kShapeTimer, 250, nullptr);
+    SetTimer(hwnd_, kKeyboardTimer, 100, nullptr);
     return true;
 }
 
@@ -172,6 +178,11 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 void CALLBACK App::OnWinEvent(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject, LONG, DWORD, DWORD)
 {
     if (!g_app) return;
+    if (event == EVENT_OBJECT_FOCUS)
+    {
+        if (g_app->touchpad_.Shaped()) g_app->textFieldKeyboard_.CheckFocusSoon();
+        return;
+    }
     if (event == EVENT_OBJECT_LOCATIONCHANGE)
     {
         if (idObject == OBJID_CURSOR) g_app->touchpad_.UpdatePointerHole();
@@ -221,6 +232,10 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
                 LogLine("raw input: messages=" + std::to_string(rawMessages_) + " parsed=" + std::to_string(rawParsed_));
                 rawLogged_ = rawMessages_;
             }
+        }
+        else if (wParam == kKeyboardTimer)
+        {
+            UpdateKeyboardRect();
         }
         else if (wParam == kExitTimer && (!touchpad_.IsOpen() || GetTickCount64() > closeDeadline_))
         {
@@ -272,6 +287,7 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         // If the touchpad is somehow still open, at least put its window back to normal.
         if (touchpad_.IsOpen()) touchpad_.Restore();
+        if (focusHook_) UnhookWinEvent(focusHook_);
         if (showHideHook_) UnhookWinEvent(showHideHook_);
         if (cloakHook_) UnhookWinEvent(cloakHook_);
         if (locationHook_) UnhookWinEvent(locationHook_);
@@ -305,6 +321,24 @@ void App::Toggle()
         LogLine(std::string(wasOn ? "toggle: closing" : "toggle: opening") + " ok=" + (ok ? "1" : "0") +
                 " error=" + std::to_string(ok ? 0 : GetLastError()));
     if (settings_.ShowOsd) osd_.Flash(!ok ? L"Couldn't toggle the touchpad" : wasOn ? L"Touchpad off" : L"Touchpad on");
+}
+
+void App::UpdateKeyboardRect()
+{
+    if (!inputPane_ &&
+        FAILED(CoCreateInstance(CLSID_FrameworkInputPane, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&inputPane_))))
+        return;
+    RECT keyboard{};
+    if (FAILED(inputPane_->Location(&keyboard)) || keyboard.right <= keyboard.left || keyboard.bottom <= keyboard.top)
+        keyboard = RECT{};
+    touchpad_.SetKeyboardRect(keyboard);
+
+    if (settings_.LogTouch && !EqualRect(&keyboard, &loggedKeyboard_))
+    {
+        LogLine("keyboard " + std::to_string(keyboard.left) + "," + std::to_string(keyboard.top) + "-" +
+                std::to_string(keyboard.right) + "," + std::to_string(keyboard.bottom));
+        loggedKeyboard_ = keyboard;
+    }
 }
 
 void App::LogTouch(const TapDetector::Summary& s)

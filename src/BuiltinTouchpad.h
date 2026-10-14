@@ -39,8 +39,8 @@ public:
     // The window currently reshaped, if any.
     HWND Shaped() const { return shaped_; }
 
-    // The keyboard-toggle corner while the touchpad is in shape (empty otherwise).
-    RECT CornerRect() const { return shaped_ ? layout::CornerRect(params_) : RECT{}; }
+    // The corner button's rectangle. While the touchpad is closed it's empty, unless `evenWhenClosed`.
+    RECT CornerRect(bool evenWhenClosed) const;
 
     // Moves the pointer hole to the current cursor position.
     void UpdatePointerHole();

@@ -23,6 +23,7 @@ namespace
         { L"StartEnabled", &Settings::StartEnabled },
         { L"ShowOsd", &Settings::ShowOsd },
         { L"ShowKeyboardForTextFields", &Settings::ShowKeyboardForTextFields },
+        { L"CornerWhenOff", &Settings::CornerWhenOff },
         { L"LogTouch", &Settings::LogTouch },
     };
 

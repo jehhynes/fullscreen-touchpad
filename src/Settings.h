@@ -14,6 +14,7 @@ struct Settings
     bool ShowOsd = true;         // brief "Touchpad on/off" label when toggling
     bool ShowKeyboardForTextFields = true; // open the touch keyboard when a text field gets focus (no hardware keyboard)
     double KeyboardCorner = 64;  // size of the bottom-right corner: double-tap for the keyboard, hold for HoldKey (0 = off)
+    bool CornerWhenOff = true;   // the corner gestures work while the touchpad is off too (the corner then ignores direct touch otherwise)
     double HoldKey = 20;         // virtual-key code held down while you hold the corner (20 = Caps Lock; 0 = none)
     bool LogTouch = false;       // diagnostics: log each touch to %LOCALAPPDATA%\VirtualTouchpad\touch.log
 

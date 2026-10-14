@@ -93,6 +93,12 @@ layout::Params BuiltinTouchpad::LayoutFor(HWND) const
     return p;
 }
 
+RECT BuiltinTouchpad::CornerRect(bool evenWhenClosed) const
+{
+    if (shaped_) return layout::CornerRect(params_);
+    return evenWhenClosed ? layout::CornerRect(LayoutFor(nullptr)) : RECT{};
+}
+
 bool BuiltinTouchpad::Apply()
 {
     HWND hwnd = FindTouchpadWindow();

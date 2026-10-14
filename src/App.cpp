@@ -336,7 +336,8 @@ void App::Toggle()
 void App::PlaceCorner(bool raise)
 {
     if (!corner_) return;
-    RECT corner = closing_ ? RECT{} : touchpad_.CornerRect(); // empty unless the touchpad is on
+    // Empty while exiting, and while the touchpad is off unless the corner works then too.
+    RECT corner = closing_ ? RECT{} : touchpad_.CornerRect(settings_.CornerWhenOff);
     // When the mouse pointer is in the corner, get out of the way so clicks reach the app underneath.
     // But not when a finger put it there: touching the corner moves the (hidden) pointer to the
     // finger before the touch arrives, and stepping aside then would make the tap miss the button.
@@ -354,8 +355,8 @@ void App::PlaceCorner(bool raise)
 
 bool App::InCorner(double x, double y) const
 {
-    if (!corner_ || !corner_->Visible()) return false; // touchpad off, or the pointer is in the corner
-    const RECT corner = touchpad_.CornerRect();
+    if (!corner_ || !corner_->Visible()) return false; // not in use now, or the pointer is in the corner
+    const RECT corner = touchpad_.CornerRect(settings_.CornerWhenOff);
     HMONITOR monitor = MonitorFromRect(&corner, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFOEXW mi{};
     mi.cbSize = sizeof(mi);

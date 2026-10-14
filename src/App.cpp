@@ -121,7 +121,10 @@ bool App::Create()
 
     taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
     RegisterHotKey(hwnd_, kToggleHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T');
-    rawTouch_.Register(hwnd_);
+    const bool rawOk = rawTouch_.Register(hwnd_);
+    if (settings_.LogTouch)
+        LogLine("start: raw input registered=" + std::to_string(rawOk ? 1 : 0) + " error=" +
+                std::to_string(rawOk ? 0 : GetLastError()));
 
     // Reshape the touchpad whenever it opens; move the pointer hole whenever the cursor moves.
     // The touchpad is an app frame window: it appears by being uncloaked rather than shown.
@@ -193,7 +196,12 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
     {
         int count = 0;
         std::vector<TapDetector::Contact> contacts;
-        if (rawTouch_.Read(lParam, count, contacts)) detector_.OnReport(int64_t(GetTickCount64()), count, contacts);
+        ++rawMessages_;
+        if (rawTouch_.Read(lParam, count, contacts))
+        {
+            ++rawParsed_;
+            detector_.OnReport(int64_t(GetTickCount64()), count, contacts);
+        }
         break; // DefWindowProc does the raw input cleanup
     }
 
@@ -209,6 +217,11 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         {
             if (!closing_) touchpad_.Apply(); // no-op when it's closed or already in shape
             UpdateTrayIcon();
+            if (settings_.LogTouch && rawMessages_ != rawLogged_)
+            {
+                LogLine("raw input: messages=" + std::to_string(rawMessages_) + " parsed=" + std::to_string(rawParsed_));
+                rawLogged_ = rawMessages_;
+            }
         }
         else if (wParam == kExitTimer && (!touchpad_.IsOpen() || GetTickCount64() > closeDeadline_))
         {
@@ -294,7 +307,7 @@ void App::Toggle()
     // Opening and closing are asynchronous (about half a second); a second press while one is still
     // in progress would undo it.
     const ULONGLONG now = GetTickCount64();
-    if (now - lastToggleTick_ < 1500) return;
+    if (now - lastToggleTick_ < 900) return;
     lastToggleTick_ = now;
 
     const bool wasOn = touchpad_.IsOpen();

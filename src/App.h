@@ -64,6 +64,7 @@ private:
     UINT taskbarCreatedMsg_ = 0;
     bool trayShowsOn_ = false;
     ULONGLONG lastToggleTick_ = 0;
+    unsigned rawMessages_ = 0, rawParsed_ = 0, rawLogged_ = 0; // diagnostics
     bool closing_ = false;        // exiting: waiting for the touchpad to close
     ULONGLONG closeDeadline_ = 0; // after this, restore the touchpad window and exit anyway
 };

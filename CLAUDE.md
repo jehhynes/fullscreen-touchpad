@@ -40,6 +40,10 @@ Only then report completion, saying what was verified and what still needs the u
   persists. "Open" means visible and not cloaked.
 - PowerShell traps when testing: `$null` passed to a string parameter becomes `""` (use `[NullString]::Value`),
   and `if ([IntPtr]::Zero)` is true (compare with `-ne [IntPtr]::Zero`).
+- A touch on our own window can arrive as `WM_POINTER*` messages or only as the mouse click Windows made
+  from it (`GetMessageExtraInfo` carries the touch signature); handle both. Touch also moves the hidden
+  cursor to the finger, so "cursor inside" doesn't mean the user pointed there (check `CURSOR_SUPPRESSED`).
+  Injected touches (`InjectTouchInput`) don't always behave like real fingers here.
 - `LogTouch=true` writes touches and toggle outcomes to `%LOCALAPPDATA%\VirtualTouchpad\touch.log`; use it to
   diagnose with the user's real touches instead of guessing.
 

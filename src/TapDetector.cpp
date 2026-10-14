@@ -11,6 +11,7 @@ void TapDetector::OnReport(int64_t nowMs, int contactCount, const std::vector<Co
         startMs_ = nowMs;
         maxCount_ = 0;
         moved_ = false;
+        startX_ = startY_ = -1;
         tracks_.clear();
     }
     lastMs_ = nowMs;
@@ -23,6 +24,7 @@ void TapDetector::OnReport(int64_t nowMs, int contactCount, const std::vector<Co
         auto it = tracks_.find(c.id);
         if (it == tracks_.end())
         {
+            if (tracks_.empty()) startX_ = c.x, startY_ = c.y;
             tracks_.emplace(c.id, Track{ c.x, c.y });
             continue;
         }
@@ -39,6 +41,8 @@ bool TapDetector::Poll(int64_t nowMs)
     last_.maxFingers = maxCount_;
     last_.durationMs = lastMs_ - startMs_;
     last_.moved = moved_;
+    last_.startX = startX_;
+    last_.startY = startY_;
     last_.toggled = maxCount_ >= params_.fingers && last_.durationMs <= params_.maxDurationMs && !moved_;
     return last_.toggled;
 }

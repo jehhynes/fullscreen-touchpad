@@ -17,7 +17,7 @@ public:
         BYTE alpha = 1;         // 1/255: invisible, but still receives touch (0 would let touch through)
         int edgeGap = 2;
         int holeRadius = 4; // in 96-DPI pixels; scaled by the monitor DPI
-        int cornerDip = 48; // keyboard-toggle corner size (0 = none)
+        int cornerDip = 64; // keyboard-toggle corner size (0 = none)
     };
 
     explicit BuiltinTouchpad(Options options) : options_(options) {}

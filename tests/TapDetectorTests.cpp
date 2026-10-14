@@ -166,3 +166,17 @@ TEST(TapDetector, SummaryDescribesTheLastTouch)
     EXPECT_EQ(d.LastSession().maxFingers, 2);
     EXPECT_FALSE(d.LastSession().toggled);
 }
+
+TEST(TapDetector, SummaryRecordsWhereTheFirstFingerLanded)
+{
+    TapDetector d;
+    d.OnReport(1000, 1, { { 7, 0.9, 0.95 } });
+    d.OnReport(1008, 2, { { 7, 0.9, 0.95 }, { 8, 0.2, 0.3 } });
+    d.Poll(2000);
+    EXPECT_DOUBLE_EQ(d.LastSession().startX, 0.9);
+    EXPECT_DOUBLE_EQ(d.LastSession().startY, 0.95);
+
+    d.OnReport(3000, 1, {}); // count only: position unknown
+    d.Poll(4000);
+    EXPECT_EQ(d.LastSession().startX, -1);
+}

@@ -42,6 +42,7 @@ public:
         int64_t durationMs = 0;
         bool moved = false;
         bool toggled = false;
+        double startX = -1, startY = -1; // where the first contact landed (0..1), or -1 if not known
     };
     const Summary& LastSession() const { return last_; }
 
@@ -56,6 +57,7 @@ private:
     int64_t startMs_ = 0, lastMs_ = 0;
     int maxCount_ = 0;
     bool moved_ = false;
+    double startX_ = -1, startY_ = -1;
     std::unordered_map<uint32_t, Track> tracks_;
     Summary last_;
 };

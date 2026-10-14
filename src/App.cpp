@@ -120,6 +120,7 @@ bool App::Create()
     if (!hwnd_) return false;
     SetUnhandledExceptionFilter(OnCrash);
     corner_ = std::make_unique<CornerButton>(hwnd_, WM_APP_CORNER_TAP);
+    if (settings_.LogTouch) corner_->SetLog([this](const std::string& line) { LogLine(line); });
 
     taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
     RegisterHotKey(hwnd_, kToggleHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T');
@@ -340,9 +341,18 @@ void App::PlaceCorner(bool raise)
     if (!corner_) return;
     RECT corner = closing_ ? RECT{} : touchpad_.CornerRect(); // empty unless the touchpad is on
     // When the mouse pointer is in the corner, get out of the way so clicks reach the app underneath.
-    POINT cursor{};
-    if (GetCursorPos(&cursor) && PtInRect(&corner, cursor)) corner = RECT{};
+    // But not when a finger put it there: touching the corner moves the (hidden) pointer to the
+    // finger before the touch arrives, and stepping aside then would make the tap miss the button.
+    CURSORINFO cursor{ sizeof(cursor) };
+    const bool cursorInside = GetCursorInfo(&cursor) && (cursor.flags & CURSOR_SHOWING) &&
+                              !(cursor.flags & CURSOR_SUPPRESSED) && PtInRect(&corner, cursor.ptScreenPos);
+    if (cursorInside) corner = RECT{};
+    const bool wasVisible = corner_->Visible();
     corner_->Place(corner, raise);
+    if (settings_.LogTouch && corner_->Visible() != wasVisible)
+        LogLine(corner_->Visible() ? "corner: shown at " + std::to_string(corner.left) + "," + std::to_string(corner.top) +
+                                         "-" + std::to_string(corner.right) + "," + std::to_string(corner.bottom)
+                                   : std::string("corner: hidden") + (cursorInside ? " (pointer inside)" : ""));
 }
 
 void App::UpdateKeyboardRect()
@@ -365,8 +375,14 @@ void App::UpdateKeyboardRect()
 
 void App::LogTouch(const TapDetector::Summary& s)
 {
+    char at[48] = "?";
+    if (s.startX >= 0) sprintf_s(at, "%.3f,%.3f", s.startX, s.startY);
+    POINT cursor{};
+    GetCursorPos(&cursor);
     LogLine("touch fingers=" + std::to_string(s.maxFingers) + " duration=" + std::to_string(s.durationMs) +
-            "ms moved=" + std::to_string(s.moved ? 1 : 0) + " toggled=" + std::to_string(s.toggled ? 1 : 0));
+            "ms moved=" + std::to_string(s.moved ? 1 : 0) + " toggled=" + std::to_string(s.toggled ? 1 : 0) +
+            " at=" + at + " cursor=" + std::to_string(cursor.x) + "," + std::to_string(cursor.y) +
+            " corner=" + (corner_ && corner_->Visible() ? "shown" : "hidden"));
 }
 
 void App::LogLine(const std::string& line)

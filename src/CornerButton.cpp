@@ -1,5 +1,7 @@
 #include "CornerButton.h"
 
+#include <windowsx.h>
+
 #include <cstdlib>
 
 namespace
@@ -15,6 +17,13 @@ namespace
                                         FEEDBACK_TOUCH_RIGHTTAP, FEEDBACK_GESTURE_PRESSANDTAP };
         BOOL off = FALSE;
         for (FEEDBACK_TYPE t : types) SetWindowFeedbackSetting(hwnd, t, 0, sizeof(off), &off);
+    }
+
+    // Whether the mouse message being handled was made from touch or pen input.
+    bool FromTouchOrPen()
+    {
+        constexpr LPARAM kSignatureMask = 0xFFFFFF00, kSignature = 0xFF515700;
+        return (GetMessageExtraInfo() & kSignatureMask) == kSignature;
     }
 }
 
@@ -75,6 +84,11 @@ LRESULT CALLBACK CornerButton::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     case WM_POINTERCAPTURECHANGED:
         if (self) self->OnPointer(msg, wParam);
         return 0; // handled: don't let it turn into mouse input
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+        // Windows sometimes delivers a touch here only as the mouse click it turned it into.
+        if (self && FromTouchOrPen()) self->OnTouchClick(msg, POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) });
+        return 0;
     case WM_POINTERACTIVATE:
         return PA_NOACTIVATE;
     case WM_MOUSEACTIVATE:
@@ -87,21 +101,52 @@ void CornerButton::OnPointer(UINT msg, WPARAM wParam)
 {
     const UINT32 id = GET_POINTERID_WPARAM(wParam);
     POINTER_INFO info{};
-    if (!GetPointerInfo(id, &info)) return;
+    if (!GetPointerInfo(id, &info))
+    {
+        if (log_ && msg != WM_POINTERUPDATE) log_("corner: message " + std::to_string(msg) + " without pointer info");
+        return;
+    }
 
     if (msg == WM_POINTERDOWN)
     {
         pointerId_ = id;
         downAt_ = info.ptPixelLocation;
         downTick_ = GetTickCount64();
+        if (log_)
+            log_("corner: down id=" + std::to_string(id) + " type=" + std::to_string(info.pointerType) + " at " +
+                 std::to_string(downAt_.x) + "," + std::to_string(downAt_.y));
         return;
     }
+    if (msg == WM_POINTERCAPTURECHANGED && log_ && downTick_ != 0) log_("corner: capture lost");
     if (msg == WM_POINTERUP && id == pointerId_ && downTick_ != 0)
     {
-        const bool quick = GetTickCount64() - downTick_ <= kMaxTapMs;
+        const ULONGLONG ms = GetTickCount64() - downTick_;
+        const bool quick = ms <= kMaxTapMs;
         const bool still = std::labs(info.ptPixelLocation.x - downAt_.x) <= kMaxTapTravel &&
                            std::labs(info.ptPixelLocation.y - downAt_.y) <= kMaxTapTravel;
+        if (log_)
+            log_("corner: up after " + std::to_string(ms) + "ms at " + std::to_string(info.ptPixelLocation.x) + "," +
+                 std::to_string(info.ptPixelLocation.y) + (quick && still ? " -> tap" : " -> not a tap"));
         if (quick && still) PostMessageW(notify_, tapMessage_, 0, 0);
     }
     if (msg == WM_POINTERUP || msg == WM_POINTERCAPTURECHANGED) downTick_ = 0;
+}
+
+void CornerButton::OnTouchClick(UINT msg, POINT client)
+{
+    POINT pt = client;
+    ClientToScreen(hwnd_, &pt);
+    if (msg == WM_LBUTTONDOWN)
+    {
+        clickAt_ = pt;
+        clickTick_ = GetTickCount64();
+        return;
+    }
+    if (clickTick_ == 0) return;
+    const ULONGLONG ms = GetTickCount64() - clickTick_;
+    clickTick_ = 0;
+    const bool tap = ms <= kMaxTapMs && std::labs(pt.x - clickAt_.x) <= kMaxTapTravel &&
+                     std::labs(pt.y - clickAt_.y) <= kMaxTapTravel;
+    if (log_) log_("corner: touch click after " + std::to_string(ms) + "ms" + (tap ? " -> tap" : " -> not a tap"));
+    if (tap) PostMessageW(notify_, tapMessage_, 0, 0);
 }

@@ -22,7 +22,7 @@ namespace layout
         int edgeGap = 2;           // uncovered strip at the left, right and bottom edges (pixels)
         int holeRadius = 3;        // half-size of the uncovered square under the pointer (pixels)
         RECT keyboard{};           // on-screen touch keyboard, left uncovered so it can be typed on (empty if hidden)
-        int cornerDip = 48;        // size of the keyboard-toggle corner at the screen's bottom right (0 = none)
+        int cornerDip = 64;        // size of the keyboard-toggle corner at the screen's bottom right (0 = none)
     };
 
     // Window rectangle, in screen coordinates.

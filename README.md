@@ -28,7 +28,7 @@ and no cursor flicker. The app:
 | --- | --- |
 | **Three-finger tap** | Turn the touchpad on or off (`ToggleFingers` setting) |
 | Ctrl+Alt+T, or tap the app's tray icon | Same |
-| **Tap the bottom-right corner** (while on) | Show or hide the on-screen keyboard, e.g. for Remote Desktop, where remote text fields can't be detected |
+| **Tap the screen's very bottom-right corner** (while on) | Show the on-screen keyboard, e.g. for Remote Desktop, where remote text fields can't be detected. The keyboard then covers the corner; close it with its own close button |
 | Everything else | Windows' touchpad gestures: move, tap, two-finger scroll and right-click, and so on |
 
 Setup:

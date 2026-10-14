@@ -38,10 +38,12 @@ namespace layout
     RECT CornerRect(const Params& p)
     {
         if (p.cornerDip <= 0) return RECT{};
-        const RECT touch = TouchRect(p);
-        const int size = Scaled(p.cornerDip, p.scale);
-        return RECT{ std::max(touch.left, touch.right - size), std::max(touch.top, touch.bottom - size), touch.right,
-                     touch.bottom };
+        // The screen's own corner (not the work area's), so a finger can find it against the bezel
+        // whatever state the taskbar is in. Full-screen apps such as Remote Desktop draw over the
+        // taskbar's strip, so the work area's corner would float invisibly above the real one.
+        const LONG right = p.monitor.right - p.edgeGap, bottom = p.monitor.bottom - p.edgeGap;
+        const LONG size = Scaled(p.cornerDip, p.scale);
+        return RECT{ std::max(p.monitor.left, right - size), std::max(p.monitor.top, bottom - size), right, bottom };
     }
 
     HRGN CreateRegion(const Params& p, POINT cursor)

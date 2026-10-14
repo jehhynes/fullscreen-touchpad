@@ -125,20 +125,35 @@ TEST(Layout, TouchKeyboardIsLeftUncoveredWhileShowing)
     DeleteObject(region);
 }
 
-TEST(Layout, KeyboardCornerSitsInsideTheEdgeStripsAndIsCutOut)
+TEST(Layout, KeyboardCornerIsTheScreensCornerInsideTheEdgeStripsAndIsCutOut)
 {
     const layout::Params p = Surface(); // 48 dip corner at 200% = 96 px
     const RECT c = layout::CornerRect(p);
     EXPECT_EQ(c.right, 2734);  // just inside the 2 px right edge strip
-    EXPECT_EQ(c.bottom, 1726); // just inside the 2 px bottom edge strip
+    EXPECT_EQ(c.bottom, 1822); // the screen's bottom, not the work area's: it covers the taskbar's corner
     EXPECT_EQ(c.right - c.left, 96);
     EXPECT_EQ(c.bottom - c.top, 96);
+}
 
+TEST(Layout, KeyboardCornerIsCutOutWhereItOverlapsTheTouchArea)
+{
+    layout::Params p = Surface();
+    p.work.bottom = 1776; // collapsed tablet taskbar: the corner (1726..1822) overlaps the work area
     const RECT window = layout::WindowRect(p);
     HRGN region = layout::CreateRegion(p, POINT{ 1000, 500 });
-    EXPECT_FALSE(InRegion(region, window, POINT{ 2700, 1700 })); // inside the corner
-    EXPECT_TRUE(InRegion(region, window, POINT{ 2600, 1700 }));  // just left of it
+    EXPECT_FALSE(InRegion(region, window, POINT{ 2700, 1750 })); // the touchpad's part of the corner is cut out
+    EXPECT_TRUE(InRegion(region, window, POINT{ 2700, 1700 }));  // just above it
+    EXPECT_TRUE(InRegion(region, window, POINT{ 2600, 1750 }));  // just left of it
     DeleteObject(region);
+}
+
+TEST(Layout, KeyboardCornerStaysPutWhenTheTaskbarCollapses)
+{
+    layout::Params p = Surface();
+    const RECT expanded = layout::CornerRect(p);
+    p.work.bottom = 1776; // collapsed tablet taskbar
+    const RECT collapsed = layout::CornerRect(p);
+    EXPECT_TRUE(EqualRect(&expanded, &collapsed));
 }
 
 TEST(Layout, KeyboardCornerCanBeTurnedOff)

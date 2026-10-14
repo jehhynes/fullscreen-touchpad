@@ -32,5 +32,7 @@ signing certificate exists, ask the user to run `scripts\install.cmd`.
 
 - The gesture engine (`src/TouchpadEngine.*`) only talks to the world through `TouchpadHost`; keep it
   that way so it stays unit-testable. Add a test in `tests/` for new gesture behaviour.
+- Never launch `VirtualTouchpad.exe` to "test" it: a second launch toggles the running instance on/off.
+  Use `check-install.ps1` to see whether it's running.
 - UIAccess only works for the signed copy in Program Files, so touch behaviour can only be checked on the
   installed app, by the user, on the touchscreen.

@@ -17,7 +17,10 @@ $sig = Get-AuthenticodeSignature $target
 Write-Host "Signature: $($sig.Status)"
 if ($sig.Status -ne 'Valid') { $ok = $false }
 
-$proc = Get-Process VirtualTouchpad -ErrorAction SilentlyContinue | Where-Object Path -eq $target
+# Windows hides a UIAccess process's path from normal processes, so match by name. Only the signed copy in
+# Program Files can run at all (a uiAccess exe anywhere else fails to launch), so the name is enough.
+# Don't launch the exe to test it: a second launch toggles the running instance.
+$proc = Get-Process VirtualTouchpad -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($proc) { Write-Host "Running: yes (pid $($proc.Id), started $($proc.StartTime))" }
 else { Write-Host 'Running: NO'; $ok = $false }
 

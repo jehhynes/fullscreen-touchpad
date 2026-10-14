@@ -68,10 +68,15 @@ it at sign-in. It asks for admin rights and runs `install.ps1` with the executio
 for that run only, so you don't need to change your system policy. From an elevated PowerShell you
 can also run `.\scripts\install.ps1 -StartWithWindows` directly.
 
-This signs the exe with a freshly generated, single-use certificate. It trusts that certificate
-machine-wide, then deletes its private key so nothing else can be signed with it. It also installs
-to `C:\Program Files\VirtualTouchpad`, adds a Start menu shortcut, and starts the app. Re-run it
-after every rebuild. `scripts\uninstall.cmd` removes everything, including the certificate.
+This one-time setup creates a local code-signing certificate and trusts it machine-wide. Its
+private key stays in the machine store, non-exportable and usable only by administrators. Setup
+then signs the app, installs it to `C:\Program Files\VirtualTouchpad`, adds a Start menu shortcut,
+and starts it.
+
+After rebuilding, run `scripts\update.cmd` to sign and deploy the new build with the existing
+certificate. It doesn't change the trust stores. `scripts\check-install.ps1` reports whether the
+installed copy is the current build, validly signed, and running. `scripts\uninstall.cmd` removes
+everything, including the certificate.
 
 ## Settings
 

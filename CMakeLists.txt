@@ -14,7 +14,7 @@ set(VT_DEFINES UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
 set(VT_OPTIONS /W4 /permissive- /utf-8)
 
 # Pure logic (window layout, tap detection), unit tested.
-add_library(touchpad_core STATIC src/Layout.cpp src/TapDetector.cpp)
+add_library(touchpad_core STATIC src/Layout.cpp src/TapDetector.cpp src/CornerGesture.cpp)
 target_include_directories(touchpad_core PUBLIC src)
 target_compile_definitions(touchpad_core PUBLIC ${VT_DEFINES})
 target_compile_options(touchpad_core PRIVATE ${VT_OPTIONS})
@@ -45,7 +45,7 @@ if(VT_BUILD_TESTS)
     FetchContent_MakeAvailable(googletest)
 
     enable_testing()
-    add_executable(touchpad_tests tests/LayoutTests.cpp tests/TapDetectorTests.cpp)
+    add_executable(touchpad_tests tests/LayoutTests.cpp tests/TapDetectorTests.cpp tests/CornerGestureTests.cpp)
     target_compile_options(touchpad_tests PRIVATE ${VT_OPTIONS})
     target_link_libraries(touchpad_tests PRIVATE touchpad_core GTest::gtest_main)
 

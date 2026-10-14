@@ -2,6 +2,7 @@
 
 #include "BuiltinTouchpad.h"
 #include "CornerButton.h"
+#include "CornerGesture.h"
 #include "Osd.h"
 #include "RawTouch.h"
 #include "Settings.h"
@@ -18,7 +19,6 @@
 constexpr wchar_t kAppWindowClass[] = L"VirtualTouchpadApp";
 constexpr UINT WM_APP_TRAY = WM_APP + 1;         // tray icon callback
 constexpr UINT WM_APP_TOGGLE = WM_APP + 2;       // toggle (also posted by a second instance)
-constexpr UINT WM_APP_CORNER_TAP = WM_APP + 3;   // the keyboard corner was tapped
 
 // Turns Windows' built-in virtual touchpad into an invisible full-screen touchpad and toggles it
 // with a three-finger tap (read from raw touchscreen input), Ctrl+Alt+T, or the tray icon.
@@ -31,8 +31,12 @@ public:
     bool Create();
     int Run();
 
-    // Puts the touchpad window back to normal (used by the crash handler).
-    void RestoreTouchpad() { touchpad_.Restore(); }
+    // Releases the corner key and puts the touchpad window back to normal (used by the crash handler).
+    void RestoreTouchpad()
+    {
+        SendHoldKey(false);
+        touchpad_.Restore();
+    }
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -64,9 +68,16 @@ private:
     TouchKeyboard touchKeyboard_;
     HWINEVENTHOOK focusHook_ = nullptr;
 
-    // Tap the bottom-right corner to show/hide the keyboard (needed in Remote Desktop).
+    // The bottom-right corner: hold it to hold down a key (Caps Lock by default, for a dictation app's
+    // push-to-talk), double-tap it to show/hide the keyboard (needed in Remote Desktop).
     void PlaceCorner(bool raise);
+    bool InCorner(double x, double y) const; // raw touchscreen position (0..1) on the corner button?
+    void OnCornerGesture(CornerGesture::Event event);
+    void SendHoldKey(bool down);
     std::unique_ptr<CornerButton> corner_;
+    CornerGesture cornerGesture_{ {}, [this](double x, double y) { return InCorner(x, y); } };
+    bool holdKeyDown_ = false;
+    RECT keyboard_{}; // the on-screen keyboard, empty when hidden
 
     HWINEVENTHOOK showHideHook_ = nullptr;
     HWINEVENTHOOK cloakHook_ = nullptr;

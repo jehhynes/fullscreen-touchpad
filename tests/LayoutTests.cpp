@@ -167,3 +167,27 @@ TEST(Layout, KeyboardCornerCanBeTurnedOff)
     EXPECT_TRUE(InRegion(region, window, POINT{ 2700, 1700 }));
     DeleteObject(region);
 }
+
+TEST(Layout, TouchPositionsMapToTheScreenInEachOrientation)
+{
+    const RECT landscape{ 0, 0, 2736, 1824 }, portrait{ 0, 0, 1824, 2736 };
+    // The panel's native bottom-right corner (1, 1).
+    POINT p = layout::TouchToScreen(1, 1, landscape, DMDO_DEFAULT);
+    EXPECT_EQ(p.x, 2735);
+    EXPECT_EQ(p.y, 1823);
+    p = layout::TouchToScreen(1, 1, landscape, DMDO_180);
+    EXPECT_EQ(p.x, 0);
+    EXPECT_EQ(p.y, 0);
+    // Turned clockwise: the native top-left corner is now top-right.
+    p = layout::TouchToScreen(0, 0, portrait, DMDO_90);
+    EXPECT_EQ(p.x, 1823);
+    EXPECT_EQ(p.y, 0);
+    // Turned anticlockwise: the native top-left corner is now bottom-left.
+    p = layout::TouchToScreen(0, 0, portrait, DMDO_270);
+    EXPECT_EQ(p.x, 0);
+    EXPECT_EQ(p.y, 2735);
+    // Monitors needn't start at the origin.
+    p = layout::TouchToScreen(0.5, 0.5, RECT{ 100, 50, 301, 151 }, DMDO_DEFAULT);
+    EXPECT_EQ(p.x, 200);
+    EXPECT_EQ(p.y, 100);
+}

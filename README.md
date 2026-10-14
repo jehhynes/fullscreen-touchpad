@@ -28,7 +28,8 @@ and no cursor flicker. The app:
 | --- | --- |
 | **Three-finger tap** | Turn the touchpad on or off (`ToggleFingers` setting) |
 | Ctrl+Alt+T, or tap the app's tray icon | Same |
-| **Tap the screen's very bottom-right corner** (while on) | Show the on-screen keyboard, e.g. for Remote Desktop, where remote text fields can't be detected. The keyboard then covers the corner; close it with its own close button |
+| **Hold the screen's very bottom-right corner** (while on) | Holds down Caps Lock until you lift your finger: push-to-talk for a dictation app such as Wispr Flow set to Caps Lock (`HoldKey` setting) |
+| **Double-tap that corner** | Show the on-screen keyboard, e.g. for Remote Desktop, where remote text fields can't be detected. The keyboard then covers the corner; close it with its own close button |
 | Everything else | Windows' touchpad gestures: move, tap, two-finger scroll and right-click, and so on |
 
 Setup:
@@ -56,7 +57,7 @@ After a rebuild, `.\scripts\deploy.ps1` installs and restarts the new build, and
 
 Tray icon → *Edit settings…* opens `%APPDATA%\VirtualTouchpad\settings.ini`; restart the app after
 editing. Options: `StartEnabled`, `ToggleFingers`, `ToggleMaxMs`, `Opacity`, `EdgeGap`, `PointerHole`,
-`ShowOsd`, `ShowKeyboardForTextFields`, `KeyboardCorner` (corner size; 0 turns it off), and `LogTouch` (diagnostics: writes each touch, toggle and
+`ShowOsd`, `ShowKeyboardForTextFields`, `KeyboardCorner` (corner size; 0 turns it off), `HoldKey` (virtual-key code held while you hold the corner: 20 is Caps Lock, 0 none), and `LogTouch` (diagnostics: writes each touch, toggle and
 keyboard position to `%LOCALAPPDATA%\VirtualTouchpad\touch.log`).
 
 Showing the keyboard uses Windows' undocumented `ITipInvocation` interface, which many tools rely on

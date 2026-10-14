@@ -39,6 +39,10 @@ namespace layout
     // touchpad so a tap there reaches the app's own corner button.
     RECT CornerRect(const Params& p);
 
+    // Where a raw touchscreen position (0..1 along the panel's own axes) is on screen, given the
+    // monitor's bounds and its rotation (DEVMODE dmDisplayOrientation: DMDO_DEFAULT, _90, _180, _270).
+    POINT TouchToScreen(double x, double y, const RECT& monitor, int orientation);
+
     // Builds the window region (in window coordinates) for SetWindowRgn. Caller owns the HRGN.
     HRGN CreateRegion(const Params& p, POINT cursor);
 }

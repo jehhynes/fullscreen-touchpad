@@ -46,6 +46,21 @@ namespace layout
         return RECT{ std::max(p.monitor.left, right - size), std::max(p.monitor.top, bottom - size), right, bottom };
     }
 
+    POINT TouchToScreen(double x, double y, const RECT& monitor, int orientation)
+    {
+        // The panel reports in its native orientation. DMDO_90 means the display is turned 90 degrees
+        // clockwise, so its native left edge is now at the top and its native top edge on the right.
+        double sx = x, sy = y;
+        switch (orientation)
+        {
+        case DMDO_90: sx = 1 - y; sy = x; break;
+        case DMDO_180: sx = 1 - x; sy = 1 - y; break;
+        case DMDO_270: sx = y; sy = 1 - x; break;
+        }
+        const LONG w = monitor.right - monitor.left, h = monitor.bottom - monitor.top;
+        return POINT{ monitor.left + std::lround(sx * (w - 1)), monitor.top + std::lround(sy * (h - 1)) };
+    }
+
     HRGN CreateRegion(const Params& p, POINT cursor)
     {
         const RECT window = WindowRect(p);

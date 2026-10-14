@@ -17,6 +17,7 @@ namespace
         { L"ToggleFingers", &Settings::ToggleFingers }, { L"ToggleMaxMs", &Settings::ToggleMaxMs },
         { L"Opacity", &Settings::Opacity },             { L"EdgeGap", &Settings::EdgeGap },
         { L"PointerHole", &Settings::PointerHole },     { L"KeyboardCorner", &Settings::KeyboardCorner },
+        { L"HoldKey", &Settings::HoldKey },
     };
     const BoolField kBools[] = {
         { L"StartEnabled", &Settings::StartEnabled },
@@ -77,6 +78,7 @@ Settings Settings::Load()
     clamp(s.EdgeGap, 0, 50);
     clamp(s.PointerHole, 1, 50);
     clamp(s.KeyboardCorner, 0, 200);
+    clamp(s.HoldKey, 0, 254);
 
     s.Save(); // writes defaults, and drops settings from older versions
     return s;

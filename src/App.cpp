@@ -119,8 +119,7 @@ bool App::Create()
                             nullptr, instance_, this);
     if (!hwnd_) return false;
     SetUnhandledExceptionFilter(OnCrash);
-    corner_ = std::make_unique<CornerButton>(hwnd_, WM_APP_CORNER_TAP);
-    if (settings_.LogTouch) corner_->SetLog([this](const std::string& line) { LogLine(line); });
+    corner_ = std::make_unique<CornerButton>();
 
     taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
     RegisterHotKey(hwnd_, kToggleHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T');
@@ -218,6 +217,7 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         {
             ++rawParsed_;
             detector_.OnReport(int64_t(GetTickCount64()), count, contacts);
+            cornerGesture_.OnReport(int64_t(GetTickCount64()), count, contacts);
         }
         break; // DefWindowProc does the raw input cleanup
     }
@@ -229,6 +229,7 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
             const bool tapped = detector_.Poll(int64_t(GetTickCount64()));
             if (wasInSession && !detector_.InSession() && settings_.LogTouch) LogTouch(detector_.LastSession());
             if (tapped) Toggle();
+            OnCornerGesture(cornerGesture_.Poll(int64_t(GetTickCount64())));
         }
         else if (wParam == kShapeTimer)
         {
@@ -278,11 +279,6 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         touchpad_.Apply();
         break;
 
-    case WM_APP_CORNER_TAP:
-        if (settings_.LogTouch) LogLine("corner tap: toggling keyboard");
-        touchKeyboard_.ToggleSoon();
-        return 0;
-
     case WM_CLOSE:
         // Don't leave an invisible touchpad behind whose pointer hole no longer follows the pointer:
         // close it first, and wait (pumping messages) until it's gone.
@@ -298,6 +294,7 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         return 0;
 
     case WM_DESTROY:
+        SendHoldKey(false);
         // If the touchpad is somehow still open, at least put its window back to normal.
         if (touchpad_.IsOpen()) touchpad_.Restore();
         if (focusHook_) UnhookWinEvent(focusHook_);
@@ -355,6 +352,56 @@ void App::PlaceCorner(bool raise)
                                    : std::string("corner: hidden") + (cursorInside ? " (pointer inside)" : ""));
 }
 
+bool App::InCorner(double x, double y) const
+{
+    if (!corner_ || !corner_->Visible()) return false; // touchpad off, or the pointer is in the corner
+    const RECT corner = touchpad_.CornerRect();
+    HMONITOR monitor = MonitorFromRect(&corner, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (!GetMonitorInfoW(monitor, &mi) || !EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &mode))
+        return false;
+    const POINT pt = layout::TouchToScreen(x, y, mi.rcMonitor, int(mode.dmDisplayOrientation));
+    // Under the on-screen keyboard, the touch belongs to the keyboard.
+    return PtInRect(&corner, pt) && !PtInRect(&keyboard_, pt);
+}
+
+void App::OnCornerGesture(CornerGesture::Event event)
+{
+    switch (event)
+    {
+    case CornerGesture::Event::HoldStart:
+        if (settings_.LogTouch) LogLine("corner: hold");
+        SendHoldKey(true);
+        break;
+    case CornerGesture::Event::HoldEnd:
+        if (settings_.LogTouch) LogLine("corner: released");
+        SendHoldKey(false);
+        break;
+    case CornerGesture::Event::DoubleTap:
+        if (settings_.LogTouch) LogLine("corner: double tap, toggling keyboard");
+        touchKeyboard_.ToggleSoon();
+        break;
+    case CornerGesture::Event::None:
+        break;
+    }
+}
+
+void App::SendHoldKey(bool down)
+{
+    const WORD vk = WORD(settings_.HoldKey);
+    if (vk == 0 || down == holdKeyDown_) return;
+    holdKeyDown_ = down;
+    INPUT input{};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = vk;
+    input.ki.wScan = WORD(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC));
+    input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+    SendInput(1, &input, sizeof(input));
+}
+
 void App::UpdateKeyboardRect()
 {
     if (!inputPane_ &&
@@ -364,6 +411,7 @@ void App::UpdateKeyboardRect()
     if (FAILED(inputPane_->Location(&keyboard)) || keyboard.right <= keyboard.left || keyboard.bottom <= keyboard.top)
         keyboard = RECT{};
     touchpad_.SetKeyboardRect(keyboard);
+    keyboard_ = keyboard;
 
     if (settings_.LogTouch && !EqualRect(&keyboard, &loggedKeyboard_))
     {

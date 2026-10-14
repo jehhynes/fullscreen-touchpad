@@ -1,23 +1,25 @@
 #pragma once
 
 #include "Settings.h"
+#include "TouchpadHost.h"
 
 #include <cstdint>
-#include <functional>
 #include <unordered_map>
 
 // Turns raw touch contacts into touchpad behaviour: relative cursor movement, taps,
-// tap-and-drag, two-finger scroll/pinch, and three/four-finger swipes.
+// double-taps, tap-and-hold drags, long-press right click, two-finger scroll/pinch,
+// and three/four-finger swipes.
 class TouchpadEngine
 {
 public:
-    struct Callbacks
+    enum Timer : int
     {
-        std::function<void()> toggleRequested;          // four-finger tap recognised
-        std::function<void(bool)> setAnimationTimer;    // start/stop periodic OnAnimationTick calls
+        TimerKinetic = 1, // kinetic scroll animation frame
+        TimerHold,        // finger held still long enough for a long press / drag
+        TimerClick,       // double-tap window expired: deliver the held-back single click
     };
 
-    TouchpadEngine(const Settings& settings, Callbacks callbacks);
+    TouchpadEngine(const Settings& settings, TouchpadHost& host);
 
     void ApplySettings(const Settings& settings) { settings_ = settings; }
     void SetDpi(unsigned dpi) { scale_ = dpi > 0 ? dpi / 96.0 : 1.0; }
@@ -25,20 +27,28 @@ public:
     // When true, only the toggle gesture is recognised and no input is synthesised.
     void SetObserveOnly(bool observe) { observeOnly_ = observe; }
 
+    bool Touching() const { return !contacts_.empty(); }
+
     void OnDown(uint32_t id, int x, int y);
     void OnMove(uint32_t id, int x, int y);
     void OnUp(uint32_t id, bool canceled);
-    void OnAnimationTick();
+    void OnTimer(int id);
 
     // Drops all tracked contacts and releases any buttons or keys being held.
     void Reset();
+
+    // The engine owns the pointer position, because Windows moves the real cursor to every
+    // touch point. SyncCursor adopts a new position (e.g. after a real mouse moved it);
+    // EnforceCursor puts the cursor back if touch has dragged it under the finger.
+    void SyncCursor(POINT p);
+    void EnforceCursor();
 
 private:
     enum class Mode
     {
         None,       // gesture not yet recognised
         Pointer,    // one finger moving the cursor
-        Drag,       // tap then touch-and-move: left button held
+        Drag,       // tap then touch-and-hold/move: left button held
         TwoPending, // two fingers down, waiting to tell scroll from pinch
         Scroll,
         Zoom,
@@ -57,24 +67,33 @@ private:
     void HandleTwoFingers(int64_t now);
     void HandleThreeFingers();
     void HandleFourFingers();
+    void OnHold();
     void EndSession(bool canceled);
 
-    void BeginCursorTracking();
+    void StartDrag();
+    void FlushPendingClick();
+    void CancelPendingClick();
+
+    void EnsureCursor();
+    POINT CursorPoint() const { return POINT{ sentX_, sentY_ }; }
     void MoveCursor(double dx, double dy, int64_t dt);
     void ScrollBy(double wx, double wy);
     void StartKinetic();
     void StopKinetic();
+    void KineticFrame();
     void HoldCtrl();
     void ReleaseCtrl();
     void ReleaseAlt();
+    void StartTimer(Timer id, unsigned ms) { host_.StartTimer(id, ms); }
+    void StopTimer(Timer id) { host_.StopTimer(id); }
 
     void Centroid(double& cx, double& cy) const;
     double Spread() const;
     double Slop() const { return settings_.TapSlop * scale_; }
-    static int64_t Now();
+    int64_t Now() { return host_.NowMs(); }
 
     Settings settings_;
-    Callbacks callbacks_;
+    TouchpadHost& host_;
     double scale_ = 1.0;
     bool observeOnly_ = false;
 
@@ -93,13 +112,15 @@ private:
     double lastCx_ = 0, lastCy_ = 0, lastDist_ = 0;
     int64_t lastMultiMs_ = 0;
 
-    // Cursor
+    // Pointer position (sub-pixel) and the pixel last sent to Windows
+    bool haveCursor_ = false;
     double curX_ = 0, curY_ = 0;
     int sentX_ = 0, sentY_ = 0;
 
-    // Tap-and-drag
-    int64_t lastTapMs_ = INT64_MIN / 2;
-    bool dragCandidate_ = false;
+    // Tap sequences. A single tap's click is held back for DoubleTapWindowMs so that a
+    // following tap can make it a double-click, or a following hold/move can make it a drag.
+    bool clickPending_ = false;
+    bool dragCandidate_ = false; // this session started while a click was pending
 
     // Scroll and zoom
     double wheelAccumX_ = 0, wheelAccumY_ = 0, zoomAccum_ = 0;

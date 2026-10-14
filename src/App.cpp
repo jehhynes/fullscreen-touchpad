@@ -8,7 +8,8 @@
 
 namespace
 {
-    constexpr UINT_PTR kKineticTimer = 1;
+    constexpr UINT_PTR kKeyboardPollTimer = 1;
+    constexpr UINT kKeyboardPollMs = 250;
     constexpr int kToggleHotkey = 1;
     constexpr UINT kTrayId = 1;
     constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -114,13 +115,13 @@ namespace
 App::App(HINSTANCE instance)
     : instance_(instance),
       settings_(Settings::Load()),
-      engine_(settings_, TouchpadEngine::Callbacks{
-          [this] { PostMessageW(hwnd_, WM_APP_TOGGLE, 0, 0); },
-          [this](bool on) {
-              if (on) SetTimer(hwnd_, kKineticTimer, 15, nullptr);
-              else KillTimer(hwnd_, kKineticTimer);
-          } })
+      engine_(settings_, host_)
 {
+    // Toggling re-registers the pointer target, so don't do it from inside a pointer message.
+    host_.onToggle = [this] { PostMessageW(hwnd_, WM_APP_TOGGLE, 0, 0); };
+    host_.onLeftClick = [this] {
+        if (settings_.ShowKeyboardForTextFields) keyboard_.CheckFocusSoon();
+    };
 }
 
 App::~App()
@@ -144,6 +145,7 @@ bool App::Create()
                             kHostWindowClass, L"Virtual Touchpad", WS_POPUP,
                             0, 0, 1, 1, nullptr, nullptr, instance_, this);
     if (!hwnd_) return false;
+    host_.hwnd = hwnd_;
 
     SetLayeredWindowAttributes(hwnd_, 0, 0, LWA_ALPHA);
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
@@ -154,6 +156,13 @@ bool App::Create()
         ChangeWindowMessageFilterEx(hwnd_, msg, MSGFLT_ALLOW, nullptr);
 
     RegisterHotKey(hwnd_, kToggleHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T');
+
+    // Raw mouse input comes only from physical mice and touchpads (not from touch, and not
+    // from our own SendInput), so it tells us when to adopt the real cursor position.
+    RAWINPUTDEVICE mouse{ 0x01, 0x02, RIDEV_INPUTSINK, hwnd_ };
+    RegisterRawInputDevices(&mouse, 1, sizeof(mouse));
+
+    SetTimer(hwnd_, kKeyboardPollTimer, kKeyboardPollMs, nullptr);
 
     iconOn_ = MakeTrayIcon(true);
     iconOff_ = MakeTrayIcon(false);
@@ -203,6 +212,9 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_POINTERUPDATE:
     case WM_POINTERUP:
     case WM_POINTERCAPTURECHANGED:
+    case WM_POINTERENTER:
+    case WM_POINTERLEAVE:
+        // Handled touch must not reach DefWindowProc, which would promote it to mouse input.
         if (HandlePointer(msg, wParam)) return 0;
         break;
 
@@ -211,8 +223,13 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
 
+    case WM_INPUT:
+        HandleRawInput(lParam);
+        break; // DefWindowProc does the raw input cleanup
+
     case WM_TIMER:
-        if (wParam == kKineticTimer) engine_.OnAnimationTick();
+        if (wParam >= Win32TouchpadHost::kTimerBase) engine_.OnTimer(int(wParam - Win32TouchpadHost::kTimerBase));
+        else if (wParam == kKeyboardPollTimer) PollKeyboard();
         return 0;
 
     case WM_HOTKEY:
@@ -243,7 +260,7 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_DISPLAYCHANGE:
     case WM_DPICHANGED:
-        if (enabled_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
+        if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
         break;
 
     case WM_DESTROY:
@@ -299,37 +316,81 @@ bool App::HandlePointer(UINT msg, WPARAM wParam)
         engine_.OnUp(id, true);
         break;
     }
+
+    // Windows moves the real cursor to the finger; put it straight back at the touchpad pointer.
+    engine_.EnforceCursor();
     return true;
+}
+
+void App::HandleRawInput(LPARAM lParam)
+{
+    RAWINPUT raw{};
+    UINT size = sizeof(raw);
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) == UINT(-1))
+        return;
+
+    // hDevice is null for injected input, including our own.
+    if (raw.header.dwType != RIM_TYPEMOUSE || raw.header.hDevice == nullptr || engine_.Touching()) return;
+    POINT p{};
+    GetCursorPos(&p);
+    engine_.SyncCursor(p);
+}
+
+void App::PollKeyboard()
+{
+    const bool passthrough = enabled_ && settings_.TypeDirectlyOnKeyboard && keyboard_.IsVisible();
+    if (passthrough == keyboardPassthrough_) return;
+    keyboardPassthrough_ = passthrough;
+    ApplyCapture();
 }
 
 // ------------------------------------------------------------------ on/off
 
 void App::SetEnabled(bool enabled, bool announce)
 {
-    engine_.Reset();
+    enabled_ = enabled;
+    keyboardPassthrough_ = enabled && settings_.TypeDirectlyOnKeyboard && keyboard_.IsVisible();
+    if (enabled) engine_.SyncCursor(host_.CursorPos());
 
-    if (enabled && !CaptureTouch())
+    if (!ApplyCapture() && enabled)
     {
         const DWORD error = GetLastError();
-        enabled = false;
+        enabled_ = false;
+        ApplyCapture();
         if (announce || HasUIAccess())
         {
             const std::wstring text = L"Couldn't take over touch input (error " + std::to_wstring(error) +
-                L").\n\nThis needs the UIAccess privilege (install with scripts\\install.ps1), and only "
+                L").\n\nThis needs the UIAccess privilege (install with scripts\\install.cmd), and only "
                 L"one app at a time can capture touch.";
             MessageBoxW(nullptr, text.c_str(), L"Virtual Touchpad", MB_OK | MB_ICONWARNING);
         }
     }
-    if (!enabled) ObserveTouch();
-
-    enabled_ = enabled;
-    engine_.SetObserveOnly(!enabled);
-
-    if (enabled && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
-    else border_.Hide();
 
     UpdateTrayIcon();
-    if (announce && settings_.ShowOsd) osd_.Flash(enabled ? L"Touchpad on" : L"Touchpad off", lastTouch_);
+    if (announce && settings_.ShowOsd) osd_.Flash(enabled_ ? L"Touchpad on" : L"Touchpad off", lastTouch_);
+}
+
+// Captures touch when the touchpad is on and the touch keyboard isn't open; otherwise observes.
+bool App::ApplyCapture()
+{
+    engine_.Reset();
+    const bool capture = enabled_ && !keyboardPassthrough_;
+    bool ok = true;
+    DWORD error = ERROR_SUCCESS;
+    if (capture && !CaptureTouch())
+    {
+        ok = false;
+        error = GetLastError();
+    }
+    if (!capture || !ok) ObserveTouch();
+    SetLastError(error); // report the capture failure, not anything from ObserveTouch
+
+    capturing_ = capture && ok;
+    engine_.SetObserveOnly(!capturing_);
+
+    if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
+    else border_.Hide();
+    return ok;
 }
 
 bool App::CaptureTouch()
@@ -417,7 +478,7 @@ void App::ShowTrayMenu(POINT pt)
     case IdShowBorder:
         settings_.ShowBorder = !settings_.ShowBorder;
         settings_.Save();
-        if (enabled_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
+        if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
         else border_.Hide();
         break;
     case IdStartWithWindows:
@@ -439,7 +500,7 @@ void App::ReloadSettings()
 {
     settings_ = Settings::Load();
     engine_.ApplySettings(settings_);
-    if (enabled_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
+    if (capturing_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
     else border_.Hide();
 }
 

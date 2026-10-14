@@ -1,10 +1,6 @@
 #include "TouchpadEngine.h"
-#include "InputSender.h"
-
-#include <windows.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 
 namespace
@@ -15,15 +11,9 @@ namespace
     }
 }
 
-TouchpadEngine::TouchpadEngine(const Settings& settings, Callbacks callbacks)
-    : settings_(settings), callbacks_(std::move(callbacks))
+TouchpadEngine::TouchpadEngine(const Settings& settings, TouchpadHost& host)
+    : settings_(settings), host_(host)
 {
-}
-
-int64_t TouchpadEngine::Now()
-{
-    using namespace std::chrono;
-    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
 // ------------------------------------------------------------------ contact events
@@ -41,7 +31,15 @@ void TouchpadEngine::OnDown(uint32_t id, int x, int y)
         moved_ = false;
         mode_ = Mode::None;
         primaryId_ = id;
-        dragCandidate_ = !observeOnly_ && now - lastTapMs_ <= settings_.DoubleTapWindowMs;
+        dragCandidate_ = !observeOnly_ && clickPending_;
+        StopTimer(TimerClick); // the pending click now waits on what this touch turns into
+
+        if (!observeOnly_)
+        {
+            // Holding still turns a tap-then-touch into a drag, or a lone touch into a right click.
+            const double holdMs = dragCandidate_ ? settings_.TapMaxMs : settings_.LongPressMs;
+            if (dragCandidate_ || settings_.LongPressRightClick) StartTimer(TimerHold, unsigned(holdMs));
+        }
     }
 
     contacts_[id] = Contact{ double(x), double(y), double(x), double(y), now };
@@ -63,7 +61,11 @@ void TouchpadEngine::OnMove(uint32_t id, int x, int y)
     c.x = x;
     c.y = y;
     c.lastMs = now;
-    if (Distance(c.startX, c.startY, x, y) > Slop()) moved_ = true;
+    if (!moved_ && Distance(c.startX, c.startY, x, y) > Slop())
+    {
+        moved_ = true;
+        StopTimer(TimerHold);
+    }
 
     if (observeOnly_) return;
 
@@ -89,10 +91,30 @@ void TouchpadEngine::OnUp(uint32_t id, bool canceled)
     EndSession(canceled);
 }
 
+void TouchpadEngine::OnTimer(int id)
+{
+    switch (id)
+    {
+    case TimerKinetic:
+        KineticFrame();
+        break;
+    case TimerHold:
+        StopTimer(TimerHold);
+        OnHold();
+        break;
+    case TimerClick:
+        StopTimer(TimerClick);
+        FlushPendingClick();
+        break;
+    }
+}
+
 void TouchpadEngine::Reset()
 {
     contacts_.clear();
     if (inSession_) EndSession(true);
+    CancelPendingClick();
+    StopTimer(TimerHold);
     StopKinetic();
 }
 
@@ -101,6 +123,15 @@ void TouchpadEngine::Reset()
 void TouchpadEngine::OnContactCountChanged(bool added)
 {
     if (observeOnly_) return;
+
+    if (contacts_.size() > 1)
+    {
+        // Multi-finger gestures never become holds, and a tap waiting to see if it was the
+        // first of a double-tap is just a click.
+        StopTimer(TimerHold);
+        FlushPendingClick();
+        dragCandidate_ = false;
+    }
 
     if (mode_ == Mode::Scroll && !added) StartKinetic();
 
@@ -133,22 +164,48 @@ void TouchpadEngine::HandleSingleFinger(const Contact& c, double dx, double dy, 
         const double fromStart = Distance(c.startX, c.startY, c.x, c.y);
         if (dragCandidate_)
         {
-            // Second touch shortly after a tap: becomes a drag once it clearly moves.
+            // Tap, then touch-and-move: drag.
             if (fromStart <= Slop()) return;
-            BeginCursorTracking();
-            input::LeftDown();
-            mode_ = Mode::Drag;
+            StartDrag();
         }
         else
         {
             // Small dead zone so taps don't nudge the cursor.
             if (fromStart <= 3 * scale_) return;
-            BeginCursorTracking();
+            EnsureCursor();
             mode_ = Mode::Pointer;
         }
     }
 
     if (mode_ == Mode::Pointer || mode_ == Mode::Drag) MoveCursor(dx, dy, dt);
+}
+
+void TouchpadEngine::OnHold()
+{
+    if (observeOnly_ || !inSession_ || moved_ || maxContacts_ != 1 || contacts_.size() != 1) return;
+    if (mode_ != Mode::None && mode_ != Mode::Pointer) return;
+
+    if (dragCandidate_)
+    {
+        // Tap, then touch-and-hold: press the button; moving now drags, lifting releases.
+        StartDrag();
+    }
+    else if (settings_.LongPressRightClick)
+    {
+        EnsureCursor();
+        host_.RightClick(CursorPoint());
+        mode_ = Mode::Done;
+    }
+}
+
+void TouchpadEngine::StartDrag()
+{
+    // The held-back click from the first tap becomes the press of this drag.
+    StopTimer(TimerClick);
+    clickPending_ = false;
+    EnsureCursor();
+    host_.LeftDown(CursorPoint());
+    mode_ = Mode::Drag;
 }
 
 void TouchpadEngine::HandleTwoFingers(int64_t now)
@@ -204,7 +261,7 @@ void TouchpadEngine::HandleTwoFingers(int64_t now)
         while (std::abs(zoomAccum_) >= WHEEL_DELTA)
         {
             const int notch = zoomAccum_ > 0 ? WHEEL_DELTA : -WHEEL_DELTA;
-            input::Wheel(notch);
+            host_.Wheel(CursorPoint(), notch);
             zoomAccum_ -= notch;
         }
     }
@@ -223,8 +280,8 @@ void TouchpadEngine::HandleThreeFingers()
     if (mode_ == Mode::AltTab)
     {
         const double step = settings_.AltTabStep * scale_;
-        while (cx - altTabLastX_ > step) { input::Chord({ VK_TAB }); altTabLastX_ += step; }
-        while (altTabLastX_ - cx > step) { input::Chord({ VK_SHIFT, VK_TAB }); altTabLastX_ -= step; }
+        while (cx - altTabLastX_ > step) { host_.Chord({ VK_TAB }); altTabLastX_ += step; }
+        while (altTabLastX_ - cx > step) { host_.Chord({ VK_SHIFT, VK_TAB }); altTabLastX_ -= step; }
         return;
     }
     if (mode_ != Mode::None) return;
@@ -235,17 +292,17 @@ void TouchpadEngine::HandleThreeFingers()
     if (std::abs(dx) > std::abs(dy))
     {
         // Like the Windows touchpad: hold Alt and step through open apps while swiping.
-        input::KeyDown(VK_MENU);
+        host_.KeyDown(VK_MENU);
         altHeld_ = true;
-        if (dx > 0) input::Chord({ VK_TAB });
-        else input::Chord({ VK_SHIFT, VK_TAB });
+        if (dx > 0) host_.Chord({ VK_TAB });
+        else host_.Chord({ VK_SHIFT, VK_TAB });
         altTabLastX_ = cx;
         mode_ = Mode::AltTab;
     }
     else
     {
-        if (dy < 0) input::Chord({ VK_LWIN, VK_TAB }); // Task View
-        else input::Chord({ VK_LWIN, 'D' });           // Show desktop
+        if (dy < 0) host_.Chord({ VK_LWIN, VK_TAB }); // Task View
+        else host_.Chord({ VK_LWIN, 'D' });           // Show desktop
         mode_ = Mode::Done;
     }
 }
@@ -262,86 +319,122 @@ void TouchpadEngine::HandleFourFingers()
     if (std::abs(dx) > std::abs(dy))
     {
         // Swiping left reveals the virtual desktop to the right, as on a touchpad.
-        input::Chord({ VK_CONTROL, VK_LWIN, static_cast<WORD>(dx < 0 ? VK_RIGHT : VK_LEFT) });
+        host_.Chord({ VK_CONTROL, VK_LWIN, static_cast<WORD>(dx < 0 ? VK_RIGHT : VK_LEFT) });
     }
-    else if (dy < 0) input::Chord({ VK_LWIN, VK_TAB });
-    else input::Chord({ VK_LWIN, 'D' });
+    else if (dy < 0) host_.Chord({ VK_LWIN, VK_TAB });
+    else host_.Chord({ VK_LWIN, 'D' });
     mode_ = Mode::Done;
 }
 
 void TouchpadEngine::EndSession(bool canceled)
 {
     inSession_ = false;
-    const int64_t now = Now();
-    const int64_t duration = now - sessionStartMs_;
-    bool tapped = false;
+    StopTimer(TimerHold);
+    const int64_t duration = Now() - sessionStartMs_;
 
     const bool tapCandidate = !canceled && !moved_ &&
         (mode_ == Mode::None || mode_ == Mode::Pointer || mode_ == Mode::TwoPending);
 
     if (tapCandidate && maxContacts_ == 4 && duration <= settings_.MultiTapMaxMs + 100)
     {
-        if (callbacks_.toggleRequested) callbacks_.toggleRequested();
+        host_.ToggleRequested();
     }
     else if (tapCandidate && !observeOnly_ && settings_.TapToClick)
     {
+        EnsureCursor();
         if (maxContacts_ == 1 && duration <= settings_.TapMaxMs)
         {
-            input::LeftClick();
-            tapped = true;
+            if (clickPending_)
+            {
+                // Second tap of a double-tap: deliver both clicks now.
+                clickPending_ = false;
+                host_.LeftClick(CursorPoint());
+                host_.LeftClick(CursorPoint());
+                host_.LeftClicked();
+            }
+            else
+            {
+                // Hold the click back briefly in case this is the start of a double-tap or drag.
+                clickPending_ = true;
+                StartTimer(TimerClick, unsigned(settings_.DoubleTapWindowMs));
+            }
         }
-        else if (maxContacts_ == 2 && duration <= settings_.MultiTapMaxMs) input::RightClick();
-        else if (maxContacts_ == 3 && duration <= settings_.MultiTapMaxMs) input::MiddleClick();
+        else if (maxContacts_ == 2 && duration <= settings_.MultiTapMaxMs) host_.RightClick(CursorPoint());
+        else if (maxContacts_ == 3 && duration <= settings_.MultiTapMaxMs) host_.MiddleClick(CursorPoint());
     }
 
-    if (mode_ == Mode::Drag) input::LeftUp();
+    // A click still held back from the previous tap was a plain click after all
+    // (e.g. this touch was too long to be a tap, or a long-press right click).
+    if (!(clickPending_ && tapCandidate && maxContacts_ == 1)) FlushPendingClick();
+
+    if (mode_ == Mode::Drag) host_.LeftUp(CursorPoint());
     ReleaseCtrl();
     ReleaseAlt();
 
-    lastTapMs_ = tapped ? now : INT64_MIN / 2;
     dragCandidate_ = false;
     mode_ = Mode::None;
 }
 
+void TouchpadEngine::FlushPendingClick()
+{
+    if (!clickPending_) return;
+    StopTimer(TimerClick);
+    clickPending_ = false;
+    if (observeOnly_) return;
+    EnsureCursor();
+    host_.LeftClick(CursorPoint());
+    host_.LeftClicked();
+}
+
+void TouchpadEngine::CancelPendingClick()
+{
+    StopTimer(TimerClick);
+    clickPending_ = false;
+}
+
 // ------------------------------------------------------------------ cursor
 
-void TouchpadEngine::BeginCursorTracking()
+void TouchpadEngine::SyncCursor(POINT p)
 {
-    POINT p{};
-    GetCursorPos(&p);
+    haveCursor_ = true;
     curX_ = sentX_ = p.x;
     curY_ = sentY_ = p.y;
 }
 
+void TouchpadEngine::EnsureCursor()
+{
+    if (!haveCursor_) SyncCursor(host_.CursorPos());
+}
+
+void TouchpadEngine::EnforceCursor()
+{
+    if (!haveCursor_ || observeOnly_) return;
+    const POINT actual = host_.CursorPos();
+    if (actual.x != sentX_ || actual.y != sentY_) host_.MoveCursorTo(CursorPoint());
+}
+
 void TouchpadEngine::MoveCursor(double dx, double dy, int64_t dt)
 {
-    // If something else moved the cursor (a real mouse, or Windows clamping us at a
-    // screen edge), carry on from where it actually is.
-    POINT actual{};
-    if (GetCursorPos(&actual) &&
-        Distance(actual.x, actual.y, sentX_, sentY_) > std::max(40 * scale_, 4 * (std::abs(dx) + std::abs(dy))))
-    {
-        curX_ = actual.x;
-        curY_ = actual.y;
-    }
-
     const double speed = std::hypot(dx, dy) / scale_ / double(std::max<int64_t>(1, dt));
     const double gain = settings_.Sensitivity *
         (1 + settings_.Acceleration * std::min(speed, settings_.MaxAccelSpeed));
 
-    const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    const int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    const int right = left + GetSystemMetrics(SM_CXVIRTUALSCREEN) - 1;
-    const int bottom = top + GetSystemMetrics(SM_CYVIRTUALSCREEN) - 1;
+    double x = curX_ + dx * gain;
+    double y = curY_ + dy * gain;
 
-    curX_ = std::clamp(curX_ + dx * gain, double(left), double(right));
-    curY_ = std::clamp(curY_ + dy * gain, double(top), double(bottom));
+    // Keep the pointer on a real monitor, the way Windows clamps a mouse, so that moving
+    // back doesn't first have to "undo" travel into gaps between differently sized screens.
+    const RECT m = host_.MonitorRectAt(POINT{ LONG(std::lround(x)), LONG(std::lround(y)) });
+    x = std::clamp(x, double(m.left), double(m.right - 1));
+    y = std::clamp(y, double(m.top), double(m.bottom - 1));
+    curX_ = x;
+    curY_ = y;
 
-    const int x = int(std::lround(curX_)), y = int(std::lround(curY_));
-    if (x == sentX_ && y == sentY_) return;
-    sentX_ = x;
-    sentY_ = y;
-    input::MoveCursorTo(x, y);
+    const int px = int(std::lround(curX_)), py = int(std::lround(curY_));
+    if (px == sentX_ && py == sentY_) return;
+    sentX_ = px;
+    sentY_ = py;
+    host_.MoveCursorTo(CursorPoint());
 }
 
 // ------------------------------------------------------------------ scrolling
@@ -353,8 +446,9 @@ void TouchpadEngine::ScrollBy(double wx, double wy)
     const int ix = int(wheelAccumX_), iy = int(wheelAccumY_);
     wheelAccumX_ -= ix;
     wheelAccumY_ -= iy;
-    input::Wheel(iy);
-    input::HWheel(ix);
+    EnsureCursor();
+    if (iy != 0) host_.Wheel(CursorPoint(), iy);
+    if (ix != 0) host_.HWheel(CursorPoint(), ix);
 }
 
 void TouchpadEngine::StartKinetic()
@@ -363,7 +457,7 @@ void TouchpadEngine::StartKinetic()
     if (std::abs(velX_) < 0.3 && std::abs(velY_) < 0.3) return;
     kineticActive_ = true;
     kineticLastMs_ = Now();
-    if (callbacks_.setAnimationTimer) callbacks_.setAnimationTimer(true);
+    StartTimer(TimerKinetic, 15);
 }
 
 void TouchpadEngine::StopKinetic()
@@ -371,10 +465,10 @@ void TouchpadEngine::StopKinetic()
     velX_ = velY_ = 0;
     if (!kineticActive_) return;
     kineticActive_ = false;
-    if (callbacks_.setAnimationTimer) callbacks_.setAnimationTimer(false);
+    StopTimer(TimerKinetic);
 }
 
-void TouchpadEngine::OnAnimationTick()
+void TouchpadEngine::KineticFrame()
 {
     if (!kineticActive_) return;
 
@@ -394,21 +488,21 @@ void TouchpadEngine::OnAnimationTick()
 void TouchpadEngine::HoldCtrl()
 {
     if (ctrlHeld_) return;
-    input::KeyDown(VK_CONTROL);
+    host_.KeyDown(VK_CONTROL);
     ctrlHeld_ = true;
 }
 
 void TouchpadEngine::ReleaseCtrl()
 {
     if (!ctrlHeld_) return;
-    input::KeyUp(VK_CONTROL);
+    host_.KeyUp(VK_CONTROL);
     ctrlHeld_ = false;
 }
 
 void TouchpadEngine::ReleaseAlt()
 {
     if (!altHeld_) return;
-    input::KeyUp(VK_MENU);
+    host_.KeyUp(VK_MENU);
     altHeld_ = false;
 }
 
@@ -416,10 +510,10 @@ void TouchpadEngine::Centroid(double& cx, double& cy) const
 {
     cx = cy = 0;
     if (contacts_.empty()) return;
-    for (const auto& [id, c] : contacts_)
+    for (const auto& entry : contacts_)
     {
-        cx += c.x;
-        cy += c.y;
+        cx += entry.second.x;
+        cy += entry.second.y;
     }
     cx /= double(contacts_.size());
     cy /= double(contacts_.size());
@@ -432,6 +526,6 @@ double TouchpadEngine::Spread() const
     double cx, cy;
     Centroid(cx, cy);
     double total = 0;
-    for (const auto& [id, c] : contacts_) total += Distance(cx, cy, c.x, c.y);
+    for (const auto& entry : contacts_) total += Distance(cx, cy, entry.second.x, entry.second.y);
     return total / double(contacts_.size());
 }

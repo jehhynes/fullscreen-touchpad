@@ -12,5 +12,8 @@
   "buildPresets": [
     { "name": "release", "configurePreset": "vs", "configuration": "Release" },
     { "name": "debug", "configurePreset": "vs", "configuration": "Debug" }
+  ],
+  "testPresets": [
+    { "name": "release", "configurePreset": "vs", "configuration": "Release", "output": { "outputOnFailure": true } }
   ]
 }

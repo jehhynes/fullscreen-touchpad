@@ -16,7 +16,14 @@ struct Settings
     double TapMaxMs = 220;          // max duration of a one-finger tap
     double MultiTapMaxMs = 350;     // max duration of a 2/3/4-finger tap
     double TapSlop = 12;            // max movement for a touch to still count as a tap
-    double DoubleTapWindowMs = 300; // tap, then touch-and-move within this window, starts a drag
+    double DoubleTapWindowMs = 250; // a tap's click waits this long for a second tap (double-click)
+                                    // or a touch-and-hold/move (drag)
+    bool LongPressRightClick = true;
+    double LongPressMs = 600;       // hold one finger still this long to right click
+
+    // Touch keyboard
+    bool ShowKeyboardForTextFields = true; // open the touch keyboard when a tap focuses a text field
+    bool TypeDirectlyOnKeyboard = true;    // while it's open, touch goes straight to the screen
 
     // Scrolling and zoom
     double ScrollSpeed = 2.0;       // wheel units per finger px (120 = one notch)

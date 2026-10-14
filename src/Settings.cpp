@@ -18,13 +18,14 @@ namespace
 
     const NumberField kNumbers[] = {
         NUM(Sensitivity), NUM(Acceleration), NUM(MaxAccelSpeed),
-        NUM(TapMaxMs), NUM(MultiTapMaxMs), NUM(TapSlop), NUM(DoubleTapWindowMs),
+        NUM(TapMaxMs), NUM(MultiTapMaxMs), NUM(TapSlop), NUM(DoubleTapWindowMs), NUM(LongPressMs),
         NUM(ScrollSpeed), NUM(KineticFriction), NUM(ZoomSpeed),
         NUM(SwipeThreshold), NUM(AltTabStep), NUM(BorderThickness),
     };
 
     const BoolField kBools[] = {
-        BOOL_(TapToClick), BOOL_(NaturalScrolling), BOOL_(KineticScrolling), BOOL_(PinchZoom),
+        BOOL_(TapToClick), BOOL_(LongPressRightClick), BOOL_(ShowKeyboardForTextFields), BOOL_(TypeDirectlyOnKeyboard),
+        BOOL_(NaturalScrolling), BOOL_(KineticScrolling), BOOL_(PinchZoom),
         BOOL_(StartEnabled), BOOL_(ShowBorder), BOOL_(ShowOsd),
     };
 
@@ -83,6 +84,10 @@ Settings Settings::Load()
             s.*f.member = _wcsicmp(value.c_str(), L"true") == 0 || value == L"1";
         }
     }
+    file.close();
+
+    // Rewrite so settings added in newer versions show up in the file.
+    s.Save();
     return s;
 }
 

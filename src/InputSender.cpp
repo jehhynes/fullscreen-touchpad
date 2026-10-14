@@ -16,6 +16,22 @@ namespace
         return in;
     }
 
+    INPUT MoveTo(POINT at)
+    {
+        const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        const int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        const int width = std::max(1, GetSystemMetrics(SM_CXVIRTUALSCREEN));
+        const int height = std::max(1, GetSystemMetrics(SM_CYVIRTUALSCREEN));
+
+        // Windows maps normalized -> pixel as (n * size) >> 16, so round up to land on the exact pixel.
+        const long long nx = (static_cast<long long>(at.x - left) * 65536 + width - 1) / width;
+        const long long ny = (static_cast<long long>(at.y - top) * 65536 + height - 1) / height;
+
+        return Mouse(static_cast<LONG>(std::clamp(nx, 0LL, 65535LL)),
+                     static_cast<LONG>(std::clamp(ny, 0LL, 65535LL)), 0,
+                     MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK);
+    }
+
     INPUT Key(WORD vk, bool up)
     {
         INPUT in{};
@@ -36,37 +52,34 @@ namespace
 
 namespace input
 {
-    void MoveCursorTo(int x, int y)
+    void MoveCursorTo(POINT at) { Send({ MoveTo(at) }); }
+
+    void LeftDown(POINT at) { Send({ MoveTo(at), Mouse(0, 0, 0, MOUSEEVENTF_LEFTDOWN) }); }
+    void LeftUp(POINT at) { Send({ MoveTo(at), Mouse(0, 0, 0, MOUSEEVENTF_LEFTUP) }); }
+
+    void LeftClick(POINT at)
     {
-        const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-        const int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        const int width = std::max(1, GetSystemMetrics(SM_CXVIRTUALSCREEN));
-        const int height = std::max(1, GetSystemMetrics(SM_CYVIRTUALSCREEN));
-
-        // Windows maps normalized -> pixel as (n * size) >> 16, so round up to land on the exact pixel.
-        const long long nx = (static_cast<long long>(x - left) * 65536 + width - 1) / width;
-        const long long ny = (static_cast<long long>(y - top) * 65536 + height - 1) / height;
-
-        Send({ Mouse(static_cast<LONG>(std::clamp(nx, 0LL, 65535LL)),
-                     static_cast<LONG>(std::clamp(ny, 0LL, 65535LL)), 0,
-                     MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK) });
+        Send({ MoveTo(at), Mouse(0, 0, 0, MOUSEEVENTF_LEFTDOWN), Mouse(0, 0, 0, MOUSEEVENTF_LEFTUP) });
     }
 
-    void LeftDown() { Send({ Mouse(0, 0, 0, MOUSEEVENTF_LEFTDOWN) }); }
-    void LeftUp() { Send({ Mouse(0, 0, 0, MOUSEEVENTF_LEFTUP) }); }
-
-    void LeftClick() { Send({ Mouse(0, 0, 0, MOUSEEVENTF_LEFTDOWN), Mouse(0, 0, 0, MOUSEEVENTF_LEFTUP) }); }
-    void RightClick() { Send({ Mouse(0, 0, 0, MOUSEEVENTF_RIGHTDOWN), Mouse(0, 0, 0, MOUSEEVENTF_RIGHTUP) }); }
-    void MiddleClick() { Send({ Mouse(0, 0, 0, MOUSEEVENTF_MIDDLEDOWN), Mouse(0, 0, 0, MOUSEEVENTF_MIDDLEUP) }); }
-
-    void Wheel(int delta)
+    void RightClick(POINT at)
     {
-        if (delta != 0) Send({ Mouse(0, 0, delta, MOUSEEVENTF_WHEEL) });
+        Send({ MoveTo(at), Mouse(0, 0, 0, MOUSEEVENTF_RIGHTDOWN), Mouse(0, 0, 0, MOUSEEVENTF_RIGHTUP) });
     }
 
-    void HWheel(int delta)
+    void MiddleClick(POINT at)
     {
-        if (delta != 0) Send({ Mouse(0, 0, delta, MOUSEEVENTF_HWHEEL) });
+        Send({ MoveTo(at), Mouse(0, 0, 0, MOUSEEVENTF_MIDDLEDOWN), Mouse(0, 0, 0, MOUSEEVENTF_MIDDLEUP) });
+    }
+
+    void Wheel(POINT at, int delta)
+    {
+        if (delta != 0) Send({ MoveTo(at), Mouse(0, 0, delta, MOUSEEVENTF_WHEEL) });
+    }
+
+    void HWheel(POINT at, int delta)
+    {
+        if (delta != 0) Send({ MoveTo(at), Mouse(0, 0, delta, MOUSEEVENTF_HWHEEL) });
     }
 
     void KeyDown(WORD vk) { Send({ Key(vk, false) }); }

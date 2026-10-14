@@ -14,12 +14,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
         return 0;
     }
 
+    // COM is used for the touch keyboard (input pane visibility, showing it).
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
     int result = 1;
     {
         App app(instance);
         if (app.Create()) result = app.Run();
     }
 
+    if (SUCCEEDED(com)) CoUninitialize();
     if (mutex) CloseHandle(mutex);
     return result;
 }

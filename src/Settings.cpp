@@ -16,7 +16,7 @@ namespace
     const NumberField kNumbers[] = {
         { L"ToggleFingers", &Settings::ToggleFingers }, { L"ToggleMaxMs", &Settings::ToggleMaxMs },
         { L"Opacity", &Settings::Opacity },             { L"EdgeGap", &Settings::EdgeGap },
-        { L"PointerHole", &Settings::PointerHole },
+        { L"PointerHole", &Settings::PointerHole },     { L"KeyboardCorner", &Settings::KeyboardCorner },
     };
     const BoolField kBools[] = {
         { L"StartEnabled", &Settings::StartEnabled },
@@ -76,6 +76,7 @@ Settings Settings::Load()
     clamp(s.Opacity, 1, 255);
     clamp(s.EdgeGap, 0, 50);
     clamp(s.PointerHole, 1, 50);
+    clamp(s.KeyboardCorner, 0, 200);
 
     s.Save(); // writes defaults, and drops settings from older versions
     return s;

@@ -45,7 +45,8 @@ namespace
     bool SameLayout(const layout::Params& a, const layout::Params& b)
     {
         return EqualRect(&a.monitor, &b.monitor) && EqualRect(&a.work, &b.work) && a.scale == b.scale &&
-               a.edgeGap == b.edgeGap && a.holeRadius == b.holeRadius && EqualRect(&a.keyboard, &b.keyboard);
+               a.edgeGap == b.edgeGap && a.holeRadius == b.holeRadius && EqualRect(&a.keyboard, &b.keyboard) &&
+               a.cornerDip == b.cornerDip;
     }
 }
 
@@ -88,6 +89,7 @@ layout::Params BuiltinTouchpad::LayoutFor(HWND) const
     p.edgeGap = options_.edgeGap;
     p.holeRadius = std::max(1, int(std::lround(options_.holeRadius * p.scale)));
     p.keyboard = keyboard_;
+    p.cornerDip = options_.cornerDip;
     return p;
 }
 

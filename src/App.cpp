@@ -45,6 +45,7 @@ namespace
         o.alpha = BYTE(std::clamp(int(s.Opacity), 1, 255));
         o.edgeGap = std::max(0, int(s.EdgeGap));
         o.holeRadius = std::max(1, int(s.PointerHole));
+        o.cornerDip = int(s.KeyboardCorner);
         return o;
     }
 
@@ -118,6 +119,7 @@ bool App::Create()
                             nullptr, instance_, this);
     if (!hwnd_) return false;
     SetUnhandledExceptionFilter(OnCrash);
+    corner_ = std::make_unique<CornerButton>(hwnd_, WM_APP_CORNER_TAP);
 
     taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
     RegisterHotKey(hwnd_, kToggleHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T');
@@ -180,12 +182,16 @@ void CALLBACK App::OnWinEvent(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObje
     if (!g_app) return;
     if (event == EVENT_OBJECT_FOCUS)
     {
-        if (g_app->touchpad_.Shaped()) g_app->textFieldKeyboard_.CheckFocusSoon();
+        if (g_app->touchpad_.Shaped()) g_app->touchKeyboard_.CheckFocusSoon();
         return;
     }
     if (event == EVENT_OBJECT_LOCATIONCHANGE)
     {
-        if (idObject == OBJID_CURSOR) g_app->touchpad_.UpdatePointerHole();
+        if (idObject == OBJID_CURSOR)
+        {
+            g_app->touchpad_.UpdatePointerHole();
+            g_app->PlaceCorner(false);
+        }
         else if (idObject == OBJID_WINDOW && hwnd && hwnd == g_app->touchpad_.Shaped())
             g_app->touchpad_.Apply(); // put it back if it moved or resized itself
         return;
@@ -226,6 +232,7 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         else if (wParam == kShapeTimer)
         {
             if (!closing_) touchpad_.Apply(); // no-op when it's closed or already in shape
+            PlaceCorner(true);
             UpdateTrayIcon();
             if (settings_.LogTouch && rawMessages_ != rawLogged_)
             {
@@ -269,6 +276,11 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_SETTINGCHANGE: // work area changes, e.g. taskbar moved or resized
         touchpad_.Apply();
         break;
+
+    case WM_APP_CORNER_TAP:
+        if (settings_.LogTouch) LogLine("corner tap: toggling keyboard");
+        touchKeyboard_.ToggleSoon();
+        return 0;
 
     case WM_CLOSE:
         // Don't leave an invisible touchpad behind whose pointer hole no longer follows the pointer:
@@ -323,6 +335,16 @@ void App::Toggle()
     if (settings_.ShowOsd) osd_.Flash(!ok ? L"Couldn't toggle the touchpad" : wasOn ? L"Touchpad off" : L"Touchpad on");
 }
 
+void App::PlaceCorner(bool raise)
+{
+    if (!corner_) return;
+    RECT corner = closing_ ? RECT{} : touchpad_.CornerRect(); // empty unless the touchpad is on
+    // When the mouse pointer is in the corner, get out of the way so clicks reach the app underneath.
+    POINT cursor{};
+    if (GetCursorPos(&cursor) && PtInRect(&corner, cursor)) corner = RECT{};
+    corner_->Place(corner, raise);
+}
+
 void App::UpdateKeyboardRect()
 {
     if (!inputPane_ &&
@@ -372,7 +394,7 @@ void App::AddTrayIcon()
     tray_.uCallbackMessage = WM_APP_TRAY;
     trayShowsOn_ = touchpad_.IsOpen();
     tray_.hIcon = trayShowsOn_ ? iconOn_ : iconOff_;
-    wcscpy_s(tray_.szTip, L"Full-screen touchpad (four-finger tap or Ctrl+Alt+T)");
+    wcscpy_s(tray_.szTip, L"Full-screen touchpad (three-finger tap or Ctrl+Alt+T)");
     Shell_NotifyIconW(NIM_ADD, &tray_);
     tray_.uVersion = NOTIFYICON_VERSION_4;
     Shell_NotifyIconW(NIM_SETVERSION, &tray_);

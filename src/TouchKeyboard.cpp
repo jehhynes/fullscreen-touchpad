@@ -1,4 +1,4 @@
-#include "TextFieldKeyboard.h"
+#include "TouchKeyboard.h"
 
 #include <shobjidl_core.h>
 #include <UIAutomation.h>
@@ -49,9 +49,9 @@ namespace
     }
 }
 
-TextFieldKeyboard::TextFieldKeyboard() : thread_([this] { Worker(); }) {}
+TouchKeyboard::TouchKeyboard() : thread_([this] { Worker(); }) {}
 
-TextFieldKeyboard::~TextFieldKeyboard()
+TouchKeyboard::~TouchKeyboard()
 {
     std::unique_lock<std::mutex> lock(mutex_);
     stop_ = true;
@@ -69,7 +69,7 @@ TextFieldKeyboard::~TextFieldKeyboard()
     }
 }
 
-void TextFieldKeyboard::CheckFocusSoon()
+void TouchKeyboard::CheckFocusSoon()
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -78,7 +78,16 @@ void TextFieldKeyboard::CheckFocusSoon()
     cv_.notify_all();
 }
 
-void TextFieldKeyboard::Worker()
+void TouchKeyboard::ToggleSoon()
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        toggle_ = true;
+    }
+    cv_.notify_all();
+}
+
+void TouchKeyboard::Worker()
 {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     {
@@ -87,22 +96,35 @@ void TextFieldKeyboard::Worker()
         ComPtr<IFrameworkInputPane> pane;
         CoCreateInstance(CLSID_FrameworkInputPane, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pane));
 
-        for (;;)
-        {
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                cv_.wait(lock, [&] { return stop_ || pending_; });
-                if (stop_) break;
-                pending_ = false;
-            }
-            Sleep(100); // let focus settle (a click can move it more than once)
-            if (!uia || HardwareKeyboardAttached() || KeyboardVisible(pane.Get()) || !FocusIsEditable(uia.Get()))
-                continue;
-
+        auto toggleKeyboard = [] {
             ComPtr<ITipInvocation> tip;
             if (SUCCEEDED(CoCreateInstance(CLSID_UIHostNoLaunch, nullptr, CLSCTX_INPROC_HANDLER | CLSCTX_LOCAL_SERVER,
                                            IID_PPV_ARGS(&tip))))
                 tip->Toggle(GetDesktopWindow());
+        };
+
+        for (;;)
+        {
+            bool check = false, toggle = false;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [&] { return stop_ || pending_ || toggle_; });
+                if (stop_) break;
+                check = pending_;
+                toggle = toggle_;
+                pending_ = toggle_ = false;
+            }
+
+            if (toggle) // explicit request (the corner tap): show or hide, regardless of focus
+            {
+                toggleKeyboard();
+                continue;
+            }
+
+            Sleep(100); // let focus settle (a click can move it more than once)
+            if (check && uia && !HardwareKeyboardAttached() && !KeyboardVisible(pane.Get()) &&
+                FocusIsEditable(uia.Get()))
+                toggleKeyboard();
         }
     }
     if (SUCCEEDED(com)) CoUninitialize();

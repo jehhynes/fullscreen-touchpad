@@ -17,6 +17,7 @@ public:
         BYTE alpha = 1;         // 1/255: invisible, but still receives touch (0 would let touch through)
         int edgeGap = 2;
         int holeRadius = 4; // in 96-DPI pixels; scaled by the monitor DPI
+        int cornerDip = 48; // keyboard-toggle corner size (0 = none)
     };
 
     explicit BuiltinTouchpad(Options options) : options_(options) {}
@@ -37,6 +38,9 @@ public:
 
     // The window currently reshaped, if any.
     HWND Shaped() const { return shaped_; }
+
+    // The keyboard-toggle corner while the touchpad is in shape (empty otherwise).
+    RECT CornerRect() const { return shaped_ ? layout::CornerRect(params_) : RECT{}; }
 
     // Moves the pointer hole to the current cursor position.
     void UpdatePointerHole();

@@ -35,6 +35,15 @@ namespace layout
                      std::min(touch.right, cursor.x + r + 1), std::min(touch.bottom, cursor.y + r + 1) };
     }
 
+    RECT CornerRect(const Params& p)
+    {
+        if (p.cornerDip <= 0) return RECT{};
+        const RECT touch = TouchRect(p);
+        const int size = Scaled(p.cornerDip, p.scale);
+        return RECT{ std::max(touch.left, touch.right - size), std::max(touch.top, touch.bottom - size), touch.right,
+                     touch.bottom };
+    }
+
     HRGN CreateRegion(const Params& p, POINT cursor)
     {
         const RECT window = WindowRect(p);
@@ -50,6 +59,7 @@ namespace layout
             DeleteObject(cut);
         };
         cutOut(p.keyboard);
+        cutOut(CornerRect(p));
         cutOut(PointerHole(p, cursor));
         return region;
     }

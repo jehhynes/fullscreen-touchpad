@@ -26,13 +26,14 @@ and no cursor flicker. The app:
 
 | Action | Result |
 | --- | --- |
-| **Four-finger tap** | Turn the touchpad on or off |
+| **Three-finger tap** | Turn the touchpad on or off (`ToggleFingers` setting) |
 | Ctrl+Alt+T, or tap the app's tray icon | Same |
+| **Tap the bottom-right corner** (while on) | Show or hide the on-screen keyboard, e.g. for Remote Desktop, where remote text fields can't be detected |
 | Everything else | Windows' touchpad gestures: move, tap, two-finger scroll and right-click, and so on |
 
 Setup:
 
-- **Set Windows' own four-finger tap to "Nothing"**, so it doesn't also fire when you toggle:
+- **Set Windows' own three-finger tap to "Nothing"**, so it doesn't also fire when you toggle:
   Settings → Bluetooth & devices → Touchpad → Three- and four-finger gestures.
 - Pointer speed and tap behaviour come from Settings → Bluetooth & devices → Touchpad.
 - While the app runs, the built-in touchpad always opens full screen and invisible, however it's
@@ -55,11 +56,11 @@ After a rebuild, `.\scripts\deploy.ps1` installs and restarts the new build, and
 
 Tray icon → *Edit settings…* opens `%APPDATA%\VirtualTouchpad\settings.ini`; restart the app after
 editing. Options: `StartEnabled`, `ToggleFingers`, `ToggleMaxMs`, `Opacity`, `EdgeGap`, `PointerHole`,
-`ShowOsd`, `ShowKeyboardForTextFields`, and `LogTouch` (diagnostics: writes each touch, toggle and
+`ShowOsd`, `ShowKeyboardForTextFields`, `KeyboardCorner` (corner size; 0 turns it off), and `LogTouch` (diagnostics: writes each touch, toggle and
 keyboard position to `%LOCALAPPDATA%\VirtualTouchpad\touch.log`).
 
 Showing the keyboard uses Windows' undocumented `ITipInvocation` interface, which many tools rely on
 but which could change in a Windows update.
 
-Note that the four-finger tap is also seen by whatever is under your fingers: turning the touchpad on
+Note that the toggle tap is also seen by whatever is under your fingers: turning the touchpad on
 with it taps the app underneath.

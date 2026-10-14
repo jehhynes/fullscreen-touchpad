@@ -24,7 +24,8 @@ add_executable(VirtualTouchpad WIN32
     src/main.cpp
     src/App.cpp
     src/BuiltinTouchpad.cpp
-    src/TextFieldKeyboard.cpp
+    src/TouchKeyboard.cpp
+    src/CornerButton.cpp
     src/RawTouch.cpp
     src/Osd.cpp
     src/Settings.cpp

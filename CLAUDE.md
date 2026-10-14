@@ -32,7 +32,7 @@ Only then report completion, saying what was verified and what still needs the u
 - Screenshots (BitBlt) show neither the cursor nor this layered touchpad window, so they can't confirm
   what the user sees. Don't claim visual results from them.
 - Never leave the user without a way out: they may have no keyboard. Every mode must be switchable off
-  by touch (the taskbar stays uncovered, and the four-finger tap toggles).
+  by touch (the taskbar stays uncovered, and the three-finger tap toggles).
 - Open the touchpad with the `ms-virtualtouchpad:` URL and close it with `WM_SYSCOMMAND`/`SC_CLOSE`. Pressing the
   taskbar button (UI Automation) failed when the keyboard was detached (the touch taskbar hides it) and
   deadlocked on the UI thread.

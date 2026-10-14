@@ -22,6 +22,7 @@ namespace layout
         int edgeGap = 2;           // uncovered strip at the left, right and bottom edges (pixels)
         int holeRadius = 3;        // half-size of the uncovered square under the pointer (pixels)
         RECT keyboard{};           // on-screen touch keyboard, left uncovered so it can be typed on (empty if hidden)
+        int cornerDip = 48;        // size of the keyboard-toggle corner at the bottom right (0 = none)
     };
 
     // Window rectangle, in screen coordinates.
@@ -32,6 +33,10 @@ namespace layout
 
     // The pointer hole, in screen coordinates. Empty if the pointer is outside the touchable area.
     RECT PointerHole(const Params& p, POINT cursor);
+
+    // The keyboard-toggle corner (bottom right of the touchable area), in screen coordinates.
+    // It's cut out of the touchpad so a tap there reaches the app's own corner button.
+    RECT CornerRect(const Params& p);
 
     // Builds the window region (in window coordinates) for SetWindowRgn. Caller owns the HRGN.
     HRGN CreateRegion(const Params& p, POINT cursor);

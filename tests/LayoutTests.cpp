@@ -124,3 +124,31 @@ TEST(Layout, TouchKeyboardIsLeftUncoveredWhileShowing)
     EXPECT_TRUE(InRegion(region, window, POINT{ 1368, 1400 }));
     DeleteObject(region);
 }
+
+TEST(Layout, KeyboardCornerSitsInsideTheEdgeStripsAndIsCutOut)
+{
+    const layout::Params p = Surface(); // 48 dip corner at 200% = 96 px
+    const RECT c = layout::CornerRect(p);
+    EXPECT_EQ(c.right, 2734);  // just inside the 2 px right edge strip
+    EXPECT_EQ(c.bottom, 1726); // just inside the 2 px bottom edge strip
+    EXPECT_EQ(c.right - c.left, 96);
+    EXPECT_EQ(c.bottom - c.top, 96);
+
+    const RECT window = layout::WindowRect(p);
+    HRGN region = layout::CreateRegion(p, POINT{ 1000, 500 });
+    EXPECT_FALSE(InRegion(region, window, POINT{ 2700, 1700 })); // inside the corner
+    EXPECT_TRUE(InRegion(region, window, POINT{ 2600, 1700 }));  // just left of it
+    DeleteObject(region);
+}
+
+TEST(Layout, KeyboardCornerCanBeTurnedOff)
+{
+    layout::Params p = Surface();
+    p.cornerDip = 0;
+    const RECT c = layout::CornerRect(p);
+    EXPECT_EQ(c.right - c.left, 0);
+    const RECT window = layout::WindowRect(p);
+    HRGN region = layout::CreateRegion(p, POINT{ 1000, 500 });
+    EXPECT_TRUE(InRegion(region, window, POINT{ 2700, 1700 }));
+    DeleteObject(region);
+}

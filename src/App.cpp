@@ -1,0 +1,469 @@
+#include "App.h"
+#include "Messages.h"
+
+#include <windowsx.h>
+
+#include <algorithm>
+#include <string>
+
+namespace
+{
+    constexpr UINT_PTR kKineticTimer = 1;
+    constexpr int kToggleHotkey = 1;
+    constexpr UINT kTrayId = 1;
+    constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    constexpr wchar_t kRunValue[] = L"VirtualTouchpad";
+
+    enum MenuId : UINT
+    {
+        IdEnabled = 1,
+        IdNaturalScrolling,
+        IdShowBorder,
+        IdStartWithWindows,
+        IdEditSettings,
+        IdReloadSettings,
+        IdExit,
+    };
+
+    // RegisterPointerInputTargetEx (observe mode) isn't in every SDK's headers; resolve it at runtime.
+    using RegisterTargetExFn = BOOL(WINAPI*)(HWND, POINTER_INPUT_TYPE, BOOL);
+    using UnregisterTargetExFn = BOOL(WINAPI*)(HWND, POINTER_INPUT_TYPE);
+
+    RegisterTargetExFn RegisterTargetEx()
+    {
+        static auto fn = reinterpret_cast<RegisterTargetExFn>(
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "RegisterPointerInputTargetEx"));
+        return fn;
+    }
+
+    UnregisterTargetExFn UnregisterTargetEx()
+    {
+        static auto fn = reinterpret_cast<UnregisterTargetExFn>(
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "UnregisterPointerInputTargetEx"));
+        return fn;
+    }
+
+    bool HasUIAccess()
+    {
+        HANDLE token = nullptr;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+        DWORD uiAccess = 0, size = 0;
+        const BOOL ok = GetTokenInformation(token, TokenUIAccess, &uiAccess, sizeof(uiAccess), &size);
+        CloseHandle(token);
+        return ok && uiAccess != 0;
+    }
+
+    // Draws a small touchpad glyph: a filled blue pad when on, a grey outline when off.
+    HICON MakeTrayIcon(bool on)
+    {
+        const int s = GetSystemMetrics(SM_CXSMICON);
+        HDC screen = GetDC(nullptr);
+        HDC dc = CreateCompatibleDC(screen);
+        HBITMAP color = CreateCompatibleBitmap(screen, s, s);
+        HBITMAP mask = CreateBitmap(s, s, 1, 1, nullptr);
+        ReleaseDC(nullptr, screen);
+
+        const RECT full{ 0, 0, s, s };
+        const int inset = std::max(1, s / 16);
+        const int r = std::max(2, s / 4);
+        const int penWidth = std::max(1, s / 12);
+
+        auto drawPad = [&](COLORREF fill, COLORREF outline, bool filled) {
+            HPEN pen = CreatePen(PS_INSIDEFRAME, penWidth, outline);
+            HBRUSH brush = filled ? CreateSolidBrush(fill) : static_cast<HBRUSH>(GetStockObject(NULL_BRUSH));
+            HGDIOBJ oldPen = SelectObject(dc, pen);
+            HGDIOBJ oldBrush = SelectObject(dc, brush);
+            RoundRect(dc, inset, inset + s / 8, s - inset, s - inset - s / 8, r, r);
+            SelectObject(dc, oldBrush);
+            SelectObject(dc, oldPen);
+            DeleteObject(pen);
+            if (filled) DeleteObject(brush);
+        };
+
+        // Colour plane: black where transparent (required by the AND/XOR icon format).
+        HGDIOBJ old = SelectObject(dc, color);
+        FillRect(dc, &full, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        if (on) drawPad(RGB(0, 120, 215), RGB(0, 120, 215), true);
+        else drawPad(0, RGB(140, 140, 140), false);
+
+        // Mask plane: white = transparent, black = opaque.
+        SelectObject(dc, mask);
+        FillRect(dc, &full, static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+        drawPad(RGB(0, 0, 0), RGB(0, 0, 0), on);
+        SelectObject(dc, old);
+
+        ICONINFO ii{ TRUE, 0, 0, mask, color };
+        HICON icon = CreateIconIndirect(&ii);
+        DeleteObject(color);
+        DeleteObject(mask);
+        DeleteDC(dc);
+        return icon;
+    }
+
+    void DisableTouchFeedback(HWND hwnd)
+    {
+        const FEEDBACK_TYPE types[] = {
+            FEEDBACK_TOUCH_CONTACTVISUALIZATION, FEEDBACK_TOUCH_TAP, FEEDBACK_TOUCH_DOUBLETAP,
+            FEEDBACK_TOUCH_PRESSANDHOLD, FEEDBACK_TOUCH_RIGHTTAP, FEEDBACK_GESTURE_PRESSANDTAP,
+        };
+        BOOL off = FALSE;
+        for (FEEDBACK_TYPE t : types) SetWindowFeedbackSetting(hwnd, t, 0, sizeof(off), &off);
+    }
+}
+
+App::App(HINSTANCE instance)
+    : instance_(instance),
+      settings_(Settings::Load()),
+      engine_(settings_, TouchpadEngine::Callbacks{
+          [this] { PostMessageW(hwnd_, WM_APP_TOGGLE, 0, 0); },
+          [this](bool on) {
+              if (on) SetTimer(hwnd_, kKineticTimer, 15, nullptr);
+              else KillTimer(hwnd_, kKineticTimer);
+          } })
+{
+}
+
+App::~App()
+{
+    if (iconOn_) DestroyIcon(iconOn_);
+    if (iconOff_) DestroyIcon(iconOff_);
+}
+
+bool App::Create()
+{
+    RegisterOverlayClass(instance_);
+
+    WNDCLASSEXW wc{ sizeof(wc) };
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = instance_;
+    wc.lpszClassName = kHostWindowClass;
+    if (!RegisterClassExW(&wc)) return false;
+
+    // A 1x1, fully transparent, click-through window. Touch reaches it by redirection, not hit-testing.
+    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+                            kHostWindowClass, L"Virtual Touchpad", WS_POPUP,
+                            0, 0, 1, 1, nullptr, nullptr, instance_, this);
+    if (!hwnd_) return false;
+
+    SetLayeredWindowAttributes(hwnd_, 0, 0, LWA_ALPHA);
+    ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+    DisableTouchFeedback(hwnd_);
+
+    taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
+    for (UINT msg : { taskbarCreatedMsg_, UINT(WM_APP_TOGGLE), UINT(WM_APP_TRAY) })
+        ChangeWindowMessageFilterEx(hwnd_, msg, MSGFLT_ALLOW, nullptr);
+
+    RegisterHotKey(hwnd_, kToggleHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T');
+
+    iconOn_ = MakeTrayIcon(true);
+    iconOff_ = MakeTrayIcon(false);
+    AddTrayIcon();
+
+    if (!HasUIAccess())
+    {
+        MessageBoxW(nullptr,
+                    L"Virtual Touchpad needs the UIAccess privilege to take over touch input, "
+                    L"and Windows only grants it to signed apps installed under Program Files.\n\n"
+                    L"Run scripts\\install.ps1 from an elevated PowerShell to install it.",
+                    L"Virtual Touchpad", MB_OK | MB_ICONWARNING);
+    }
+
+    SetEnabled(settings_.StartEnabled, false);
+    return true;
+}
+
+int App::Run()
+{
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0)
+    {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    return int(msg.wParam);
+}
+
+LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NCCREATE)
+    {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+        static_cast<App*>(cs->lpCreateParams)->hwnd_ = hwnd;
+    }
+    auto* app = reinterpret_cast<App*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    return app ? app->HandleMessage(msg, wParam, lParam) : DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_POINTERDOWN:
+    case WM_POINTERUPDATE:
+    case WM_POINTERUP:
+    case WM_POINTERCAPTURECHANGED:
+        if (HandlePointer(msg, wParam)) return 0;
+        break;
+
+    case WM_POINTERACTIVATE:
+        return PA_NOACTIVATE;
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+
+    case WM_TIMER:
+        if (wParam == kKineticTimer) engine_.OnAnimationTick();
+        return 0;
+
+    case WM_HOTKEY:
+        if (wParam == kToggleHotkey)
+        {
+            GetCursorPos(&lastTouch_);
+            SetEnabled(!enabled_, true);
+        }
+        return 0;
+
+    case WM_APP_TOGGLE:
+        SetEnabled(!enabled_, true);
+        return 0;
+
+    case WM_APP_TRAY:
+        switch (LOWORD(lParam))
+        {
+        case NIN_SELECT:
+        case NIN_KEYSELECT:
+            GetCursorPos(&lastTouch_);
+            SetEnabled(!enabled_, true);
+            break;
+        case WM_CONTEXTMENU:
+            ShowTrayMenu(POINT{ GET_X_LPARAM(wParam), GET_Y_LPARAM(wParam) });
+            break;
+        }
+        return 0;
+
+    case WM_DISPLAYCHANGE:
+    case WM_DPICHANGED:
+        if (enabled_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
+        break;
+
+    case WM_DESTROY:
+        engine_.Reset();
+        ReleaseTouch();
+        border_.Hide();
+        UnregisterHotKey(hwnd_, kToggleHotkey);
+        Shell_NotifyIconW(NIM_DELETE, &tray_);
+        PostQuitMessage(0);
+        return 0;
+
+    default:
+        if (msg == taskbarCreatedMsg_ && msg != 0)
+        {
+            AddTrayIcon(); // Explorer restarted
+            return 0;
+        }
+        break;
+    }
+    return DefWindowProcW(hwnd_, msg, wParam, lParam);
+}
+
+bool App::HandlePointer(UINT msg, WPARAM wParam)
+{
+    const UINT32 id = GET_POINTERID_WPARAM(wParam);
+    POINTER_INFO info{};
+    if (!GetPointerInfo(id, &info))
+    {
+        // The pointer is already gone; make sure we don't keep a stale contact.
+        if (msg == WM_POINTERUP || msg == WM_POINTERCAPTURECHANGED) engine_.OnUp(id, true);
+        return true;
+    }
+    if (info.pointerType != PT_TOUCH) return false;
+
+    const POINT p = info.ptPixelLocation;
+    const bool canceled = (info.pointerFlags & POINTER_FLAG_CANCELED) != 0;
+    lastTouch_ = p;
+
+    switch (msg)
+    {
+    case WM_POINTERDOWN:
+        engine_.SetDpi(DpiAt(p));
+        engine_.OnDown(id, p.x, p.y);
+        break;
+    case WM_POINTERUPDATE:
+        if (canceled) engine_.OnUp(id, true);
+        else engine_.OnMove(id, p.x, p.y);
+        break;
+    case WM_POINTERUP:
+        engine_.OnUp(id, canceled);
+        break;
+    case WM_POINTERCAPTURECHANGED:
+        engine_.OnUp(id, true);
+        break;
+    }
+    return true;
+}
+
+// ------------------------------------------------------------------ on/off
+
+void App::SetEnabled(bool enabled, bool announce)
+{
+    engine_.Reset();
+
+    if (enabled && !CaptureTouch())
+    {
+        const DWORD error = GetLastError();
+        enabled = false;
+        if (announce || HasUIAccess())
+        {
+            const std::wstring text = L"Couldn't take over touch input (error " + std::to_wstring(error) +
+                L").\n\nThis needs the UIAccess privilege (install with scripts\\install.ps1), and only "
+                L"one app at a time can capture touch.";
+            MessageBoxW(nullptr, text.c_str(), L"Virtual Touchpad", MB_OK | MB_ICONWARNING);
+        }
+    }
+    if (!enabled) ObserveTouch();
+
+    enabled_ = enabled;
+    engine_.SetObserveOnly(!enabled);
+
+    if (enabled && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
+    else border_.Hide();
+
+    UpdateTrayIcon();
+    if (announce && settings_.ShowOsd) osd_.Flash(enabled ? L"Touchpad on" : L"Touchpad off", lastTouch_);
+}
+
+bool App::CaptureTouch()
+{
+    ReleaseTouch();
+    if (!RegisterPointerInputTarget(hwnd_, PT_TOUCH)) return false;
+    registration_ = Registration::Capture;
+    return true;
+}
+
+void App::ObserveTouch()
+{
+    ReleaseTouch();
+    // Observing lets apps keep receiving touch while we watch for the toggle gesture.
+    // If it isn't available, the hotkey and tray icon still work.
+    if (auto registerEx = RegisterTargetEx(); registerEx && registerEx(hwnd_, PT_TOUCH, TRUE))
+        registration_ = Registration::Observe;
+}
+
+void App::ReleaseTouch()
+{
+    if (registration_ == Registration::Capture)
+        UnregisterPointerInputTarget(hwnd_, PT_TOUCH);
+    else if (registration_ == Registration::Observe)
+        if (auto unregisterEx = UnregisterTargetEx()) unregisterEx(hwnd_, PT_TOUCH);
+    registration_ = Registration::None;
+}
+
+// ------------------------------------------------------------------ tray
+
+void App::AddTrayIcon()
+{
+    tray_ = NOTIFYICONDATAW{ sizeof(tray_) };
+    tray_.hWnd = hwnd_;
+    tray_.uID = kTrayId;
+    tray_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
+    tray_.uCallbackMessage = WM_APP_TRAY;
+    tray_.hIcon = enabled_ ? iconOn_ : iconOff_;
+    wcscpy_s(tray_.szTip, enabled_ ? L"Virtual Touchpad: on" : L"Virtual Touchpad: off");
+    Shell_NotifyIconW(NIM_ADD, &tray_);
+    tray_.uVersion = NOTIFYICON_VERSION_4;
+    Shell_NotifyIconW(NIM_SETVERSION, &tray_);
+}
+
+void App::UpdateTrayIcon()
+{
+    tray_.uFlags = NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+    tray_.hIcon = enabled_ ? iconOn_ : iconOff_;
+    wcscpy_s(tray_.szTip, enabled_ ? L"Virtual Touchpad: on" : L"Virtual Touchpad: off");
+    Shell_NotifyIconW(NIM_MODIFY, &tray_);
+}
+
+void App::ShowTrayMenu(POINT pt)
+{
+    HMENU menu = CreatePopupMenu();
+    auto check = [](bool on) { return UINT(on ? MF_CHECKED : MF_UNCHECKED); };
+
+    AppendMenuW(menu, MF_STRING | check(enabled_), IdEnabled, L"Touchpad enabled\tCtrl+Alt+T");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING | check(settings_.NaturalScrolling), IdNaturalScrolling, L"Natural scrolling");
+    AppendMenuW(menu, MF_STRING | check(settings_.ShowBorder), IdShowBorder, L"Show edge glow when on");
+    AppendMenuW(menu, MF_STRING | check(StartsWithWindows()), IdStartWithWindows, L"Start with Windows");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, IdEditSettings, L"Edit settings...");
+    AppendMenuW(menu, MF_STRING, IdReloadSettings, L"Reload settings");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, IdExit, L"Exit");
+
+    SetForegroundWindow(hwnd_); // required for the menu to close when clicking elsewhere
+    const UINT cmd = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, pt.x, pt.y, hwnd_, nullptr);
+    PostMessageW(hwnd_, WM_NULL, 0, 0);
+    DestroyMenu(menu);
+
+    switch (cmd)
+    {
+    case IdEnabled:
+        lastTouch_ = pt;
+        SetEnabled(!enabled_, true);
+        break;
+    case IdNaturalScrolling:
+        settings_.NaturalScrolling = !settings_.NaturalScrolling;
+        settings_.Save();
+        engine_.ApplySettings(settings_);
+        break;
+    case IdShowBorder:
+        settings_.ShowBorder = !settings_.ShowBorder;
+        settings_.Save();
+        if (enabled_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
+        else border_.Hide();
+        break;
+    case IdStartWithWindows:
+        SetStartWithWindows(!StartsWithWindows());
+        break;
+    case IdEditSettings:
+        ShellExecuteW(nullptr, L"open", L"notepad.exe", Settings::FilePath().c_str(), nullptr, SW_SHOWNORMAL);
+        break;
+    case IdReloadSettings:
+        ReloadSettings();
+        break;
+    case IdExit:
+        DestroyWindow(hwnd_);
+        break;
+    }
+}
+
+void App::ReloadSettings()
+{
+    settings_ = Settings::Load();
+    engine_.ApplySettings(settings_);
+    if (enabled_ && settings_.ShowBorder) border_.Show(settings_.BorderThickness);
+    else border_.Hide();
+}
+
+bool App::StartsWithWindows() const
+{
+    DWORD size = 0;
+    return RegGetValueW(HKEY_CURRENT_USER, kRunKey, kRunValue, RRF_RT_REG_SZ, nullptr, nullptr, &size) == ERROR_SUCCESS;
+}
+
+void App::SetStartWithWindows(bool on)
+{
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_SET_VALUE, &key) != ERROR_SUCCESS) return;
+    if (on)
+    {
+        wchar_t path[MAX_PATH];
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        const std::wstring value = L"\"" + std::wstring(path) + L"\"";
+        RegSetValueExW(key, kRunValue, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+                       DWORD((value.size() + 1) * sizeof(wchar_t)));
+    }
+    else
+    {
+        RegDeleteValueW(key, kRunValue);
+    }
+    RegCloseKey(key);
+}

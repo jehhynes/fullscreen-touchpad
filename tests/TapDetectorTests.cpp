@@ -180,3 +180,34 @@ TEST(TapDetector, SummaryRecordsWhereTheFirstFingerLanded)
     d.Poll(4000);
     EXPECT_EQ(d.LastSession().startX, -1);
 }
+
+TEST(TapDetector, CountsOnlyFingersStillDown)
+{
+    // A quick double tap with part of the hand resting on the screen: the second finger lands in
+    // the report that lifts the first, whose contact count (3) includes the lifting finger.
+    TapDetector::Params p;
+    p.fingers = 3;
+    TapDetector d(p);
+    int64_t now = 1000;
+    for (int i = 0; i < 8; ++i) d.OnReport(now += 8, 2, { { 9, 0.7, 0.8 }, { 1, 0.95, 0.95 } });
+    d.OnReport(now += 8, 3, { { 9, 0.7, 0.8 }, { 1, 0.95, 0.95, false }, { 2, 0.95, 0.95 } });
+    for (int i = 0; i < 8; ++i) d.OnReport(now += 8, 2, { { 9, 0.7, 0.8 }, { 2, 0.95, 0.95 } });
+    d.OnReport(now += 8, 2, { { 9, 0.7, 0.8, false }, { 2, 0.95, 0.95, false } });
+    bool toggled = false;
+    for (int i = 0; i < 40; ++i) toggled = d.Poll(now += 10) || toggled;
+    EXPECT_FALSE(toggled);
+    EXPECT_EQ(d.LastSession().maxFingers, 2);
+}
+
+TEST(TapDetector, AContactWhoseLiftWentUnreportedStopsCounting)
+{
+    TapDetector::Params p;
+    p.fingers = 3;
+    TapDetector d(p);
+    int64_t now = 1000;
+    d.OnReport(now, 2, { { 1, 0.3, 0.5 }, { 2, 0.4, 0.5 } });
+    for (int i = 0; i < 30; ++i) d.OnReport(now += 8, 1, { { 1, 0.3, 0.5 } }); // 2 vanished
+    d.OnReport(now += 8, 2, { { 1, 0.3, 0.5 }, { 3, 0.5, 0.5 } });
+    for (int i = 0; i < 40; ++i) d.Poll(now += 10);
+    EXPECT_EQ(d.LastSession().maxFingers, 2);
+}

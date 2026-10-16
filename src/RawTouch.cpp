@@ -97,23 +97,37 @@ bool RawTouch::Read(LPARAM lParam, int& contactCount, std::vector<TapDetector::C
         auto* report = reinterpret_cast<PCHAR>(const_cast<BYTE*>(raw->data.hid.bRawData) + r * raw->data.hid.dwSizeHid);
         const ULONG length = raw->data.hid.dwSizeHid;
 
+        // The frame's contact count includes contacts being lifted in it. In hybrid mode a frame spans
+        // several reports and only the first carries the count. Slots past the frame's last contact
+        // are unused, so a slot that isn't touching is a lift only while the frame has contacts left.
         ULONG count = 0;
         if (HidP_GetUsageValue(HidP_Input, kDigitizerPage, 0, kContactCount, &count, ppd, report, length) ==
-            HIDP_STATUS_SUCCESS)
+                HIDP_STATUS_SUCCESS &&
+            count > 0)
+        {
             contactCount = std::max(contactCount, int(count));
+            device->remaining = count;
+            device->hasCount = true;
+        }
 
         int touching = 0;
         for (USHORT collection : device->fingerCollections)
         {
+            const bool inFrame = device->remaining > 0;
+            if (inFrame) --device->remaining;
+            // Slots past the frame's contacts keep stale data, even a tip switch still on from a
+            // contact lifted long ago, so they're ignored whenever the digitizer gives a count.
+            if (device->hasCount && !inFrame) continue;
             USAGE usages[16];
             ULONG usageCount = ARRAYSIZE(usages);
             if (HidP_GetUsages(HidP_Input, kDigitizerPage, collection, usages, &usageCount, ppd, report, length) !=
                 HIDP_STATUS_SUCCESS)
                 continue;
-            if (std::find(usages, usages + usageCount, kTipSwitch) == usages + usageCount) continue; // not touching
-            ++touching;
+            const bool tip = std::find(usages, usages + usageCount, kTipSwitch) != usages + usageCount;
+            if (!tip && !inFrame) continue; // an unused slot
+            if (tip) ++touching;
 
-            // Positions only feed the "did it move" check; without a known range, count fingers only.
+            // Without a known position range, count fingers only.
             ULONG id = collection, x = 0, y = 0;
             HidP_GetUsageValue(HidP_Input, kDigitizerPage, collection, kContactId, &id, ppd, report, length);
             if (!device->hasRange ||
@@ -124,7 +138,7 @@ bool RawTouch::Read(LPARAM lParam, int& contactCount, std::vector<TapDetector::C
                 continue;
             contacts.push_back(TapDetector::Contact{
                 uint32_t(id), double(LONG(x) - device->minX) / double(device->maxX - device->minX),
-                double(LONG(y) - device->minY) / double(device->maxY - device->minY) });
+                double(LONG(y) - device->minY) / double(device->maxY - device->minY), tip });
         }
         contactCount = std::max(contactCount, touching);
     }

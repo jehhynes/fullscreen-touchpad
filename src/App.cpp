@@ -234,7 +234,9 @@ LRESULT App::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         else if (wParam == kShapeTimer)
         {
             if (!closing_) touchpad_.Apply(); // no-op when it's closed or already in shape
-            PlaceCorner(true);
+            // Re-assert the corner is on top, but not while a finger is down: reordering windows then
+            // can interrupt the drag or gesture in progress.
+            PlaceCorner(!detector_.InSession());
             UpdateTrayIcon();
             if (settings_.LogTouch && rawMessages_ != rawLogged_)
             {

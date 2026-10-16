@@ -126,17 +126,6 @@ TEST(CornerGesture, SlidingOffIsNotAHold)
     EXPECT_TRUE(Press(g, now, 1000, 0.95, 0.95, -0.3).empty());
 }
 
-TEST(CornerGesture, TwoFingersAreNotAHold)
-{
-    CornerGesture g = Make();
-    int64_t now = 1000;
-    for (int i = 0; i < 100; ++i, now += 10)
-    {
-        g.OnReport(now, 2, { { 1, 0.95, 0.95 }, { 2, 0.5, 0.5 } });
-        EXPECT_EQ(g.Poll(now), Event::None);
-    }
-    EXPECT_EQ(g.Poll(now + 200), Event::None);
-}
 
 TEST(CornerGesture, QuickDoubleTapWithLiftReportsIsSeenAsTwoTaps)
 {
@@ -169,4 +158,80 @@ TEST(CornerGesture, AHoldEndsPromptlyWhenTheLiftIsReported)
     ASSERT_TRUE(g.Holding());
     g.OnReport(now, 0, {});
     EXPECT_EQ(g.Poll(now + 40), Event::HoldEnd); // well before the 150 ms idle timeout
+}
+
+TEST(CornerGesture, AnotherContactElsewhereDoesNotSpoilAHold)
+{
+    // Part of the hand resting on the screen while a finger holds the corner.
+    CornerGesture g = Make();
+    int64_t now = 1000;
+    std::vector<Event> events;
+    for (int i = 0; i < 100; ++i, now += 10)
+    {
+        g.OnReport(now, 2, { { 1, 0.95, 0.95 }, { 2, 0.7, 0.8 } });
+        if (const Event e = g.Poll(now); e != Event::None) events.push_back(e);
+    }
+    g.OnReport(now, 1, { { 1, 0.95, 0.95, false }, { 2, 0.7, 0.8 } });
+    if (const Event e = g.Poll(now + 10); e != Event::None) events.push_back(e);
+    EXPECT_EQ(events, (std::vector<Event>{ Event::HoldStart, Event::HoldEnd }));
+}
+
+TEST(CornerGesture, DoubleTapWithTheHandRestingOnTheScreen)
+{
+    // The resting contact keeps every report non-empty; the taps are seen by their own lifts. The
+    // second finger lands in the same report that lifts the first.
+    CornerGesture g = Make();
+    int64_t now = 1000;
+    std::vector<Event> events;
+    auto report = [&](std::vector<TapDetector::Contact> c) {
+        c.push_back({ 9, 0.75, 0.9 });
+        g.OnReport(now, int(c.size()), c);
+        if (const Event e = g.Poll(now); e != Event::None) events.push_back(e);
+        now += 10;
+    };
+    for (int i = 0; i < 20; ++i) report({});
+    for (int i = 0; i < 8; ++i) report({ { 1, 0.95, 0.95 } });
+    report({ { 1, 0.95, 0.95, false } });
+    for (int i = 0; i < 5; ++i) report({});
+    for (int i = 0; i < 8; ++i) report({ { 2, 0.95, 0.95 } });
+    report({ { 2, 0.95, 0.95, false } });
+    for (int i = 0; i < 20; ++i) report({});
+    EXPECT_EQ(events, (std::vector<Event>{ Event::DoubleTap }));
+}
+
+TEST(CornerGesture, SecondTapLandingAsTheFirstLiftsIsADoubleTap)
+{
+    CornerGesture g = Make();
+    int64_t now = 1000;
+    for (int i = 0; i < 8; ++i, now += 10) g.OnReport(now, 1, { { 1, 0.95, 0.95 } });
+    g.OnReport(now, 2, { { 1, 0.95, 0.95, false }, { 2, 0.95, 0.95 } });
+    for (int i = 0; i < 8; ++i, now += 10) g.OnReport(now, 1, { { 2, 0.95, 0.95 } });
+    g.OnReport(now, 1, { { 2, 0.95, 0.95, false } });
+    EXPECT_EQ(g.Poll(now), Event::DoubleTap);
+}
+
+TEST(CornerGesture, AFingerThatSlidesIntoTheCornerIsNotAPress)
+{
+    CornerGesture g = Make();
+    int64_t now = 1000;
+    for (int i = 0; i <= 20; ++i, now += 10) g.OnReport(now, 1, { { 1, 0.5 + 0.45 * i / 20, 0.95 } });
+    for (int i = 0; i < 100; ++i, now += 10)
+    {
+        g.OnReport(now, 1, { { 1, 0.95, 0.95 } });
+        EXPECT_EQ(g.Poll(now), Event::None);
+    }
+}
+
+TEST(CornerGesture, ALiftIsSeenEvenWhenTheReportStillCountsTheLiftingFinger)
+{
+    CornerGesture g = Make();
+    int64_t now = 1000;
+    for (int i = 0; i < 40; ++i, now += 10)
+    {
+        g.OnReport(now, 1, { { 1, 0.95, 0.95 } });
+        g.Poll(now);
+    }
+    ASSERT_TRUE(g.Holding());
+    g.OnReport(now, 1, { { 1, 0.95, 0.95, false } }); // the digitizer's count includes the lifting finger
+    EXPECT_EQ(g.Poll(now), Event::HoldEnd);
 }

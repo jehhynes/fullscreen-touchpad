@@ -5,46 +5,64 @@
 
 void CornerGesture::OnReport(int64_t nowMs, int contactCount, const std::vector<TapDetector::Contact>& contacts)
 {
-    // A finger landing after a report with none touching is a new touch, even if it came quickly
-    // (the second tap of a double tap).
-    if (active_ && lastEmpty_ && !contacts.empty()) EndTouch();
-    lastEmpty_ = contacts.empty();
-    if (!active_)
+    // Nothing touching at all: every finger has lifted.
+    const bool anyTouching = std::any_of(contacts.begin(), contacts.end(), [](const auto& c) { return c.touching; });
+    if (!anyTouching && contactCount == 0)
     {
-        if (contacts.empty()) return;
-        active_ = true;
-        startMs_ = nowMs;
-        holding_ = false;
-        candidate_ = inCorner_(contacts[0].x, contacts[0].y);
-        firstId_ = contacts[0].id;
-        startX_ = contacts[0].x;
-        startY_ = contacts[0].y;
-    }
-    lastMs_ = nowMs;
-    if (!candidate_ || holding_) return; // once holding, keep holding until the finger lifts
-
-    if (std::max(contactCount, int(contacts.size())) > 1)
-    {
-        candidate_ = false; // a multi-finger touch isn't a corner gesture
+        down_.clear();
+        if (active_) EndTouch();
         return;
     }
+
     for (const auto& c : contacts)
-        if (c.id == firstId_ &&
-            (std::abs(c.x - startX_) > params_.maxTravel || std::abs(c.y - startY_) > params_.maxTravel))
-            candidate_ = false; // slid off: a swipe, not a press
+    {
+        if (c.touching) continue;
+        down_.erase(c.id);
+        if (active_ && c.id == id_) EndTouch();
+    }
+    Expire(nowMs);
+
+    for (const auto& c : contacts)
+    {
+        if (!c.touching) continue;
+        const bool isNew = down_.find(c.id) == down_.end();
+        down_[c.id] = nowMs;
+        if (active_ && c.id == id_)
+        {
+            lastMs_ = nowMs;
+            if (std::abs(c.x - startX_) > params_.maxTravel || std::abs(c.y - startY_) > params_.maxTravel)
+                still_ = false; // slid off: a swipe, not a press (but a hold, once started, lasts until the lift)
+        }
+        else if (!active_ && isNew && inCorner_(c.x, c.y))
+        {
+            active_ = true;
+            id_ = c.id;
+            startMs_ = lastMs_ = nowMs;
+            startX_ = c.x;
+            startY_ = c.y;
+            still_ = true;
+            holding_ = false;
+        }
+    }
+}
+
+void CornerGesture::Expire(int64_t nowMs)
+{
+    // A contact whose lift went unreported.
+    std::erase_if(down_, [&](const auto& d) { return nowMs - d.second >= params_.idleMs; });
+    if (active_ && nowMs - lastMs_ >= params_.idleMs) EndTouch();
 }
 
 CornerGesture::Event CornerGesture::Poll(int64_t nowMs)
 {
-    if (active_ && (nowMs - lastMs_ >= params_.idleMs || (lastEmpty_ && nowMs - lastMs_ >= params_.liftMs)))
-        EndTouch();
+    Expire(nowMs);
     if (pending_ != Event::None)
     {
         const Event e = pending_;
         pending_ = Event::None;
         return e;
     }
-    if (active_ && candidate_ && !holding_ && !lastEmpty_ && nowMs - startMs_ >= params_.holdMs)
+    if (active_ && still_ && !holding_ && nowMs - startMs_ >= params_.holdMs)
     {
         holding_ = true;
         return Event::HoldStart;
@@ -62,7 +80,7 @@ void CornerGesture::EndTouch()
         pending_ = Event::HoldEnd;
         return;
     }
-    if (!candidate_ || lastMs_ - startMs_ >= params_.holdMs)
+    if (!still_ || lastMs_ - startMs_ >= params_.holdMs)
     {
         lastTapMs_ = -1;
         return;

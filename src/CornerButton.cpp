@@ -29,7 +29,13 @@ CornerButton::~CornerButton()
 void CornerButton::Place(const RECT& rect, bool raise)
 {
     const bool show = rect.right > rect.left && rect.bottom > rect.top;
-    if (show && visible_ && !raise && EqualRect(&rect, &placed_)) return;
+    if (show && visible_ && EqualRect(&rect, &placed_))
+    {
+        if (!raise) return;
+        // Already on top: leave the window order alone.
+        const POINT center{ (rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2 };
+        if (GetAncestor(WindowFromPoint(center), GA_ROOT) == hwnd_) return;
+    }
     if (!show)
     {
         if (hwnd_ && visible_) ShowWindow(hwnd_, SW_HIDE);

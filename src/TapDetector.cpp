@@ -13,14 +13,19 @@ void TapDetector::OnReport(int64_t nowMs, int contactCount, const std::vector<Co
         moved_ = false;
         startX_ = startY_ = -1;
         tracks_.clear();
+        down_.clear();
     }
     lastMs_ = nowMs;
 
-    // Some digitizers spread one frame over several reports and only put the count in the first.
-    maxCount_ = std::max({ maxCount_, contactCount, int(contacts.size()) });
+    for (const Contact& c : contacts)
+        if (!c.touching) down_.erase(c.id);
+    // A contact whose lift went unreported.
+    std::erase_if(down_, [&](const auto& d) { return nowMs - d.second >= params_.idleMs; });
 
     for (const Contact& c : contacts)
     {
+        if (!c.touching) continue;
+        down_[c.id] = nowMs;
         auto it = tracks_.find(c.id);
         if (it == tracks_.end())
         {
@@ -32,6 +37,10 @@ void TapDetector::OnReport(int64_t nowMs, int contactCount, const std::vector<Co
             std::abs(c.y - it->second.startY) > params_.maxTravel)
             moved_ = true;
     }
+
+    // Some digitizers spread one frame over several reports and only put the count in the first, so
+    // contacts are counted across reports. Without positions, only the digitizer's count is known.
+    maxCount_ = std::max(maxCount_, contacts.empty() ? contactCount : int(down_.size()));
 }
 
 bool TapDetector::Poll(int64_t nowMs)

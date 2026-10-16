@@ -6,7 +6,7 @@
 
 // Recognises the toggle gesture, a quick multi-finger tap, from raw touchscreen reports.
 // A touch "session" lasts from the first report until no reports arrive for idleMs (all fingers
-// lifted). It counts as the toggle tap if it reached `fingers` contacts, was short, and no
+// lifted). It counts as the toggle tap if it had `fingers` contacts down at once, was short, and no
 // contact moved far (so multi-finger swipes don't toggle).
 class TapDetector
 {
@@ -22,7 +22,8 @@ public:
     struct Contact
     {
         uint32_t id;
-        double x, y; // 0..1 across the screen
+        double x, y;          // 0..1 across the screen
+        bool touching = true; // false: this report lifts it
     };
 
     explicit TapDetector(Params params = {}) : params_(params) {}
@@ -59,5 +60,9 @@ private:
     bool moved_ = false;
     double startX_ = -1, startY_ = -1;
     std::unordered_map<uint32_t, Track> tracks_;
+    // Contacts down now, by id, and when each was last reported. Counting these rather than the
+    // digitizer's contact count matters: that count includes fingers being lifted, so one finger
+    // lifting as the next lands (a quick double tap) counts as two.
+    std::unordered_map<uint32_t, int64_t> down_;
     Summary last_;
 };
